@@ -1,0 +1,78 @@
+import { NextResponse } from 'next/server'
+import { getSession } from '@/lib/session'
+import { createShopifyClient } from '@/lib/shopify'
+import { computeTags } from '@/lib/tagging'
+import { readManualTags } from '@/lib/customer-tags-storage'
+import { readProductCategories } from '@/lib/product-categories-storage'
+import type { ShopifyCustomer, ShopifyOrder, EnrichedCustomer } from '@/types'
+
+export async function GET() {
+  const session = getSession()
+  if (!session) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+
+  try {
+    const shopify = createShopifyClient(session)
+    const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString()
+
+    const manualTagsMap = readManualTags()
+    const productCategoryMap = readProductCategories()
+
+    const [customers, recentOrders] = await Promise.all([
+      shopify.getAll<ShopifyCustomer>('/customers.json', 'customers', {
+        fields: 'id,first_name,last_name,email,phone,orders_count,total_spent,note,tags,created_at,updated_at,last_order_id,last_order_name,email_marketing_consent',
+      }),
+      shopify.getAll<ShopifyOrder>('/orders.json', 'orders', {
+        status: 'any',
+        created_at_min: yearAgo,
+        fields: 'id,customer,created_at,financial_status,line_items',
+      }),
+    ])
+
+    // Build maps: customerId → last order date, customerId → purchased product types
+    const lastOrderMap = new Map<number, Date>()
+    const productTypesMap = new Map<number, Set<string>>()
+
+    for (const order of recentOrders) {
+      if (!order.customer) continue
+      const cid = order.customer.id
+
+      const existing = lastOrderMap.get(cid)
+      const orderDate = new Date(order.created_at)
+      if (!existing || orderDate > existing) lastOrderMap.set(cid, orderDate)
+
+      const typeSet = productTypesMap.get(cid) ?? new Set<string>()
+      for (const item of order.line_items ?? []) {
+        const pt = item.product_type?.trim()
+        if (pt) typeSet.add(pt)
+        const manualCat = productCategoryMap[item.title]
+        if (manualCat) typeSet.add(manualCat)
+      }
+      productTypesMap.set(cid, typeSet)
+    }
+
+    const enriched: EnrichedCustomer[] = customers.map((c) => {
+      const totalSpent = parseFloat(c.total_spent)
+      const lastOrderDate = lastOrderMap.get(c.id) ?? null
+
+      const computedTags = computeTags({
+        totalSpent,
+        ordersCount: c.orders_count,
+        lastOrderDate,
+      })
+
+      return {
+        ...c,
+        aov: c.orders_count > 0 ? totalSpent / c.orders_count : 0,
+        lastOrderDate: lastOrderDate?.toISOString() ?? null,
+        computedTags,
+        manualTags: manualTagsMap[String(c.id)] ?? [],
+        productTags: Array.from(productTypesMap.get(c.id) ?? []),
+      }
+    })
+
+    return NextResponse.json({ customers: enriched })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
