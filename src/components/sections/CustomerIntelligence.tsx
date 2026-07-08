@@ -9,7 +9,9 @@ import {
 import TagBadge from '@/components/ui/TagBadge'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import RFMAnalysis from '@/components/sections/RFMAnalysis'
-import type { EnrichedCustomer, CustomerTag, ShopifyOrder, CSTicket } from '@/types'
+import Segments from '@/components/sections/Segments'
+import { computeRFM, SEGMENT_META } from '@/lib/rfm'
+import type { EnrichedCustomer, ShopifyOrder, CSTicket } from '@/types'
 import { CUSTOMER_TAGS } from '@/types'
 
 function formatDate(iso: string | null) {
@@ -19,6 +21,12 @@ function formatDate(iso: string | null) {
 
 function fmt(n: number) {
   return `€${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+// Tags actually pushed to Shopify/Omnisend on sync: behavioral tags + one
+// per purchased product category, so category segments are targetable in campaigns.
+function syncableTags(c: EnrichedCustomer): string[] {
+  return [...c.computedTags, ...c.manualTags, ...c.productTags.map((t) => `category-${t}`)]
 }
 
 const TICKET_STATUS_STYLES: Record<string, string> = {
@@ -452,13 +460,11 @@ export default function CustomerIntelligence({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [filterTag, setFilterTag] = useState<CustomerTag | 'all'>('all')
-  const [filterCategory, setFilterCategory] = useState<string | null>(null)
   const [syncingId, setSyncingId] = useState<number | null>(null)
   const [syncedIds, setSyncedIds] = useState<Set<number>>(new Set())
   const [bulkSyncing, setBulkSyncing] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
-  const [activeView, setActiveView] = useState<'customers' | 'rfm'>('customers')
+  const [activeView, setActiveView] = useState<'customers' | 'rfm' | 'segments'>('customers')
   const [addingTagFor, setAddingTagFor] = useState<number | null>(null)
   const [addTagValue, setAddTagValue] = useState('')
   const [sortKey, setSortKey] = useState<'name' | 'orders' | 'aov' | 'lastOrder' | null>(null)
@@ -514,6 +520,11 @@ export default function CustomerIntelligence({
     return map
   }, [tickets])
 
+  const cohortById = useMemo(() => {
+    const scored = computeRFM(customers)
+    return new Map(scored.map((s) => [s.id, s.segment]))
+  }, [customers])
+
   function toggleEmailVisibility(id: number, e: React.MouseEvent) {
     e.stopPropagation()
     setHiddenEmailIds((prev) => {
@@ -547,23 +558,14 @@ export default function CustomerIntelligence({
     if (custData.customers) setCustomers(custData.customers)
   }
 
-  const allCategories = useMemo(
-    () => [...new Set(customers.flatMap((c) => c.productTags ?? []))].sort(),
-    [customers],
-  )
-
   const filtered = useMemo(() => {
-    return customers.filter((c) => {
-      const matchesQuery =
-        !query ||
+    if (!query) return customers
+    return customers.filter(
+      (c) =>
         `${c.first_name} ${c.last_name}`.toLowerCase().includes(query.toLowerCase()) ||
         c.email.toLowerCase().includes(query.toLowerCase())
-      const allTags = [...c.computedTags, ...c.manualTags]
-      const matchesTag = filterTag === 'all' || allTags.includes(filterTag)
-      const matchesCategory = !filterCategory || (c.productTags ?? []).includes(filterCategory)
-      return matchesQuery && matchesTag && matchesCategory
-    })
-  }, [customers, query, filterTag, filterCategory])
+    )
+  }, [customers, query])
 
   function handleSort(key: 'name' | 'orders' | 'aov' | 'lastOrder') {
     if (sortKey === key) {
@@ -639,7 +641,7 @@ export default function CustomerIntelligence({
   async function syncCustomerTags(customer: EnrichedCustomer, e: React.MouseEvent) {
     e.stopPropagation()
     setSyncingId(customer.id)
-    const allTags = [...customer.computedTags, ...customer.manualTags]
+    const allTags = syncableTags(customer)
     try {
       await fetch(`/api/shopify/customers/${customer.id}/tags`, {
         method: 'PUT',
@@ -661,8 +663,8 @@ export default function CustomerIntelligence({
 
   async function syncAllTags() {
     setBulkSyncing(true)
-    for (const c of customers.filter((c) => c.computedTags.length > 0 || c.manualTags.length > 0)) {
-      const allTags = [...c.computedTags, ...c.manualTags]
+    for (const c of customers.filter((c) => c.computedTags.length > 0 || c.manualTags.length > 0 || c.productTags.length > 0)) {
+      const allTags = syncableTags(c)
       await fetch(`/api/shopify/customers/${c.id}/tags`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -680,15 +682,7 @@ export default function CustomerIntelligence({
     setBulkSyncing(false)
   }
 
-  const TAG_FILTERS: Array<{ value: CustomerTag | 'all'; label: string }> = [
-    { value: 'all',              label: 'All' },
-    { value: 'VIP',              label: 'VIP' },
-    { value: '1-order',          label: '1 Order' },
-    { value: 'never-purchased',  label: 'Never Purchased' },
-    { value: 'winback',          label: 'Winback' },
-  ]
-
-  const taggedCount = customers.filter((c) => c.computedTags.length > 0 || c.manualTags.length > 0).length
+  const taggedCount = customers.filter((c) => c.computedTags.length > 0 || c.manualTags.length > 0 || c.productTags.length > 0).length
 
   return (
     <section className="max-w-4xl">
@@ -696,7 +690,11 @@ export default function CustomerIntelligence({
         <div>
           <h2 className="font-serif text-3xl text-charcoal-700 tracking-tight">Customer Intelligence</h2>
           <p className="text-sm text-charcoal-400 mt-1.5">
-            {activeView === 'customers' ? 'Click any customer to see their full profile' : 'RFM — Recency · Frequency · Monetary scoring'}
+            {activeView === 'customers'
+              ? 'Click any customer to see their full profile'
+              : activeView === 'rfm'
+              ? 'RFM — Recency · Frequency · Monetary scoring'
+              : 'Segments by product purchased, cohort, and customer tag'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -722,14 +720,14 @@ export default function CustomerIntelligence({
 
       {/* Tab bar */}
       <div className="flex gap-1 mb-6 bg-sand-100 p-1 rounded-xl w-fit">
-        {(['customers', 'rfm'] as const).map((view) => (
+        {(['customers', 'rfm', 'segments'] as const).map((view) => (
           <button
             key={view}
             onClick={() => setActiveView(view)}
             className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all capitalize
               ${activeView === view ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
           >
-            {view === 'rfm' ? 'RFM Analysis' : 'Customers'}
+            {view === 'rfm' ? 'RFM Analysis' : view === 'segments' ? 'Segments' : 'Customers'}
           </button>
         ))}
       </div>
@@ -745,6 +743,10 @@ export default function CustomerIntelligence({
         <RFMAnalysis customers={customers} />
       )}
 
+      {!loading && !error && activeView === 'segments' && (
+        <Segments customers={customers} customTagTypes={customTagTypes} />
+      )}
+
       {!loading && !error && activeView === 'customers' && (
         <>
           {/* Tag logic legend */}
@@ -758,66 +760,26 @@ export default function CustomerIntelligence({
             </div>
           </div>
 
-          {/* Filters */}
-          <div className="flex flex-col sm:flex-row gap-3 mb-3">
-            <div className="relative flex-1">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-charcoal-400" />
-              <input
-                type="text"
-                placeholder="Search by name or email…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-2.5 text-sm bg-white border border-sand-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-terracotta-200 focus:border-terracotta-400 transition-all placeholder:text-charcoal-400"
-              />
-            </div>
-            <div className="flex gap-1.5 flex-wrap">
-              {TAG_FILTERS.map(({ value, label }) => (
-                <button
-                  key={value}
-                  onClick={() => setFilterTag(value)}
-                  className={`px-3 py-2 text-xs font-medium rounded-lg transition-colors whitespace-nowrap
-                    ${filterTag === value ? 'bg-terracotta-500 text-white' : 'bg-white border border-sand-300 text-charcoal-500 hover:bg-sand-100'}`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+          {/* Search */}
+          <div className="relative mb-3">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-charcoal-400" />
+            <input
+              type="text"
+              placeholder="Search by name or email…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="w-full pl-9 pr-4 py-2.5 text-sm bg-white border border-sand-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-terracotta-200 focus:border-terracotta-400 transition-all placeholder:text-charcoal-400"
+            />
           </div>
-
-          {/* Category filter */}
-          {allCategories.length > 0 && (
-            <div className="flex items-center gap-2 mb-4 flex-wrap">
-              <span className="text-[10px] uppercase tracking-widest text-charcoal-400 shrink-0">Category</span>
-              {allCategories.map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => setFilterCategory(filterCategory === cat ? null : cat)}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-full border transition-all
-                    ${filterCategory === cat
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
-                >
-                  {cat}
-                </button>
-              ))}
-              {filterCategory && (
-                <button onClick={() => setFilterCategory(null)} className="text-xs text-charcoal-400 hover:text-charcoal-600 flex items-center gap-0.5">
-                  <X size={11} /> clear
-                </button>
-              )}
-            </div>
-          )}
 
           <p className="text-xs text-charcoal-400 mb-3">
             Showing {filtered.length} of {customers.length} customers
-            {filterTag !== 'all' && ` · tag: ${filterTag}`}
-            {filterCategory && ` · category: ${filterCategory}`}
           </p>
 
           {filtered.length === 0 ? (
             <div className="text-center py-16 text-charcoal-400">
               <p className="font-medium">No customers match</p>
-              <p className="text-sm mt-1">Try adjusting your search or filter.</p>
+              <p className="text-sm mt-1">Try a different search term.</p>
             </div>
           ) : (
             <div className="bg-white rounded-2xl shadow-card overflow-hidden">
@@ -854,7 +816,7 @@ export default function CustomerIntelligence({
                 </thead>
                 <tbody className="divide-y divide-sand-200">
                   {sorted.map((c) => {
-                    const allTags = [...c.computedTags, ...c.manualTags]
+                    const allTags = syncableTags(c)
                     const isExpanded = expandedId === c.id
                     const isEmailHidden = hiddenEmailIds.has(c.id)
                     const customerTickets = ticketsByEmail.get(c.email.toLowerCase()) ?? []
@@ -884,18 +846,28 @@ export default function CustomerIntelligence({
                                 <span className="px-1.5 py-0 rounded-full text-[10px] font-medium bg-olive-100 text-olive-600">✉ sub</span>
                               )}
                             </p>
-                            {c.productTags && c.productTags.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1.5">
-                                {c.productTags.map((tag) => (
-                                  <span
-                                    key={`cat-${tag}`}
-                                    className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200"
-                                  >
-                                    {tag}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
+                            {(() => {
+                              const cohort = cohortById.get(c.id)
+                              const cohortMeta = cohort ? SEGMENT_META[cohort] : null
+                              if (!cohortMeta && c.productTags.length === 0) return null
+                              return (
+                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                  {cohortMeta && (
+                                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium ${cohortMeta.bg} ${cohortMeta.text} border ${cohortMeta.border}`}>
+                                      {cohort}
+                                    </span>
+                                  )}
+                                  {c.productTags.map((tag) => (
+                                    <span
+                                      key={`cat-${tag}`}
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200"
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              )
+                            })()}
                           </td>
                           <td className="px-4 py-4 text-charcoal-700 font-medium">{c.orders_count}</td>
                           <td className="px-4 py-4 text-charcoal-700">€{c.aov.toFixed(2)}</td>
