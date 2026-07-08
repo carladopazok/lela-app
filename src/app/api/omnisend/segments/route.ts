@@ -12,29 +12,30 @@ interface ListSegmentsResponse {
 
 export async function POST(req: NextRequest) {
   try {
-    const { name, tag }: { name: string; tag: string } = await req.json()
-    if (!name || !tag) {
-      return NextResponse.json({ error: 'name and tag are required' }, { status: 400 })
+    const body: { name: string; tag?: string; tags?: string[] } = await req.json()
+    const tags = body.tags ?? (body.tag ? [body.tag] : [])
+    if (!body.name || tags.length === 0) {
+      return NextResponse.json({ error: 'name and at least one tag are required' }, { status: 400 })
     }
 
     // Avoid creating duplicate segments if one with this name already exists
     const existing = await omnisendDatedGet<ListSegmentsResponse>('/segments', { limit: '50', sort: 'name' })
-    const found = existing.segments?.find((s) => s.name === name)
+    const found = existing.segments?.find((s) => s.name === body.name)
     if (found) {
       return NextResponse.json({ segment: found, alreadyExisted: true })
     }
 
+    // Each tag becomes its own condition; conditions within a group are AND'd
+    // together, so combining segments here maps to "has tag A AND has tag B".
     const segment = await omnisendDatedPost<OmnisendSegment>('/segments', {
-      name,
+      name: body.name,
       conditionGroups: [
         {
-          conditions: [
-            {
-              entity: 'contact',
-              junction: 'and',
-              filters: [{ operator: 'anyOf', property: 'tags', value: [tag] }],
-            },
-          ],
+          conditions: tags.map((tag) => ({
+            entity: 'contact',
+            junction: 'and',
+            filters: [{ operator: 'anyOf', property: 'tags', value: [tag] }],
+          })),
         },
       ],
     })

@@ -19,7 +19,7 @@ export async function GET() {
 
     const [customers, recentOrders, abandonedCheckouts] = await Promise.all([
       shopify.getAll<ShopifyCustomer>('/customers.json', 'customers', {
-        fields: 'id,first_name,last_name,email,phone,orders_count,total_spent,note,tags,created_at,updated_at,last_order_id,last_order_name,email_marketing_consent',
+        fields: 'id,first_name,last_name,email,phone,orders_count,total_spent,note,tags,created_at,updated_at,last_order_id,last_order_name,email_marketing_consent,default_address',
       }),
       shopify.getAll<ShopifyOrder>('/orders.json', 'orders', {
         status: 'any',
@@ -124,6 +124,7 @@ export async function GET() {
         manualTags: manualTagsMap[String(c.id)] ?? [],
         productTags: Array.from(productTypesMap.get(c.id) ?? []),
         abandonedCheckouts: customerAbandonedCheckouts,
+        country: c.default_address?.country ?? null,
       }
     })
 

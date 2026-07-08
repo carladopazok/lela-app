@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import { computeRFM, cellSegment, SEGMENT_META, SEGMENT_ORDER } from '@/lib/rfm'
 import TagBadge from '@/components/ui/TagBadge'
+import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import type { EnrichedCustomer } from '@/types'
 import type { RFMSegment, ScoredCustomer } from '@/lib/rfm'
 
@@ -42,6 +43,20 @@ function CategoryBadge({ tag }: { tag: string }) {
 
 export default function RFMAnalysis({ customers }: { customers: EnrichedCustomer[] }) {
   const [selectedSegment, setSelectedSegment] = useState<RFMSegment | null>(null)
+  const [hiddenEmailIds, setHiddenEmailIds] = useState<Set<number>>(new Set())
+
+  function toggleEmailVisibility(id: number) {
+    setHiddenEmailIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const allEmailsHidden = customers.length > 0 && customers.every((c) => hiddenEmailIds.has(c.id))
+  function toggleAllEmails() {
+    setHiddenEmailIds(allEmailsHidden ? new Set() : new Set(customers.map((c) => c.id)))
+  }
 
   const scored: ScoredCustomer[] = useMemo(() => computeRFM(customers), [customers])
 
@@ -250,14 +265,17 @@ export default function RFMAnalysis({ customers }: { customers: EnrichedCustomer
               ? `${selectedSegment} · ${displayList.length} customer${displayList.length !== 1 ? 's' : ''}`
               : `All Customers · ${total}`}
           </p>
-          {selectedSegment && (
-            <button
-              onClick={() => setSelectedSegment(null)}
-              className="flex items-center gap-1 text-xs text-charcoal-400 hover:text-charcoal-600"
-            >
-              <X size={12} /> Clear filter
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            <HideAllEmailsButton allHidden={allEmailsHidden} onClick={toggleAllEmails} />
+            {selectedSegment && (
+              <button
+                onClick={() => setSelectedSegment(null)}
+                className="flex items-center gap-1 text-xs text-charcoal-400 hover:text-charcoal-600"
+              >
+                <X size={12} /> Clear filter
+              </button>
+            )}
+          </div>
         </div>
 
         <table className="w-full text-sm">
@@ -277,7 +295,13 @@ export default function RFMAnalysis({ customers }: { customers: EnrichedCustomer
               <tr key={c.id} className="hover:bg-cream-50 transition-colors">
                 <td className="px-5 py-3">
                   <p className="font-medium text-charcoal-700">{c.first_name} {c.last_name}</p>
-                  <p className="text-xs text-charcoal-400 mt-0.5">{c.email}</p>
+                  <p className="text-xs text-charcoal-400 mt-0.5">
+                    <MaskedEmail
+                      email={c.email}
+                      hidden={hiddenEmailIds.has(c.id)}
+                      onToggle={() => toggleEmailVisibility(c.id)}
+                    />
+                  </p>
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-end gap-2">

@@ -85,6 +85,10 @@ export interface ShopifyCustomer {
     opt_in_level: string
     consent_updated_at: string | null
   } | null
+  default_address: {
+    country: string | null
+    country_code: string | null
+  } | null
 }
 
 // ─── Omnisend ───────────────────────────────────────────────────────────────
@@ -133,6 +137,7 @@ export interface EnrichedCustomer extends ShopifyCustomer {
   manualTags: string[]
   productTags: string[]   // unique product_type values from purchase history
   abandonedCheckouts: AbandonedCheckoutSummary[]
+  country: string | null
 }
 
 export interface LateShipment {

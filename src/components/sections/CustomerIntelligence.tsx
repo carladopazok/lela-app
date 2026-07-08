@@ -4,10 +4,12 @@ import { useEffect, useState, useMemo } from 'react'
 import {
   Search, RefreshCw, AlertCircle, Tag, CheckCircle2, Loader2,
   X, Check, Lock, ChevronDown, ShoppingBag, Mail, Package, ExternalLink,
-  ArrowUp, ArrowDown, ArrowUpDown, Eye, EyeOff,
+  ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react'
 import TagBadge from '@/components/ui/TagBadge'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
+import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
+import CollapsibleCard from '@/components/ui/CollapsibleCard'
 import RFMAnalysis from '@/components/sections/RFMAnalysis'
 import Segments from '@/components/sections/Segments'
 import { computeRFM, SEGMENT_META } from '@/lib/rfm'
@@ -25,14 +27,15 @@ function fmt(n: number) {
 }
 
 // Tags actually pushed to Shopify/Omnisend on sync: behavioral tags, one per
-// purchased product category, and the customer's cohort — so every segment
-// shown in the Segments tab is targetable as a real tag in campaigns.
+// purchased product category, the customer's cohort, and their country — so
+// every segment shown in the Segments tab is targetable as a real tag in campaigns.
 function syncableTags(c: EnrichedCustomer, cohort?: RFMSegment): string[] {
   return [
     ...c.computedTags,
     ...c.manualTags,
     ...c.productTags.map((t) => `category-${t}`),
     ...(cohort ? [`cohort-${cohort}`] : []),
+    ...(c.country ? [`country-${c.country}`] : []),
   ]
 }
 
@@ -509,6 +512,7 @@ export default function CustomerIntelligence({
   const [bulkSyncing, setBulkSyncing] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [activeView, setActiveView] = useState<'customers' | 'rfm' | 'segments'>('customers')
+  const [taggingLogicOpen, setTaggingLogicOpen] = useState(false)
   const [addingTagFor, setAddingTagFor] = useState<number | null>(null)
   const [addTagValue, setAddTagValue] = useState('')
   const [sortKey, setSortKey] = useState<'name' | 'orders' | 'aov' | 'lastOrder' | null>(null)
@@ -576,6 +580,11 @@ export default function CustomerIntelligence({
       next.has(id) ? next.delete(id) : next.add(id)
       return next
     })
+  }
+
+  const allEmailsHidden = customers.length > 0 && customers.every((c) => hiddenEmailIds.has(c.id))
+  function toggleAllEmails() {
+    setHiddenEmailIds(allEmailsHidden ? new Set() : new Set(customers.map((c) => c.id)))
   }
 
   async function handleCategoryAssigned(title: string, category: string | null) {
@@ -794,15 +803,20 @@ export default function CustomerIntelligence({
       {!loading && !error && activeView === 'customers' && (
         <>
           {/* Tag logic legend */}
-          <div className="bg-white rounded-2xl shadow-card p-5 mb-6">
-            <h3 className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">Tagging Logic</h3>
-            <div className="grid grid-cols-2 gap-3 text-sm text-charcoal-500">
-              <div className="flex items-start gap-2"><TagBadge tag="VIP" /><span>At least 2 orders</span></div>
-              <div className="flex items-start gap-2"><TagBadge tag="1-order" /><span>Purchased exactly once</span></div>
-              <div className="flex items-start gap-2"><TagBadge tag="never-purchased" /><span>0 orders</span></div>
-              <div className="flex items-start gap-2"><TagBadge tag="winback" /><span>1 order in last 365 days, no return</span></div>
-              <div className="flex items-start gap-2"><TagBadge tag="abandoned-checkout" /><span>Has an open abandoned checkout</span></div>
-            </div>
+          <div className="mb-6">
+            <CollapsibleCard
+              label="Tagging Logic"
+              isOpen={taggingLogicOpen}
+              onToggle={() => setTaggingLogicOpen((v) => !v)}
+            >
+              <div className="grid grid-cols-2 gap-3 text-sm text-charcoal-500">
+                <div className="flex items-start gap-2"><TagBadge tag="VIP" /><span>At least 2 orders</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="1-order" /><span>Purchased exactly once</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="never-purchased" /><span>0 orders</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="winback" /><span>1 order in last 365 days, no return</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="abandoned-checkout" /><span>Has an open abandoned checkout</span></div>
+              </div>
+            </CollapsibleCard>
           </div>
 
           {/* Search */}
@@ -817,9 +831,12 @@ export default function CustomerIntelligence({
             />
           </div>
 
-          <p className="text-xs text-charcoal-400 mb-3">
-            Showing {filtered.length} of {customers.length} customers
-          </p>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-charcoal-400">
+              Showing {filtered.length} of {customers.length} customers
+            </p>
+            <HideAllEmailsButton allHidden={allEmailsHidden} onClick={toggleAllEmails} />
+          </div>
 
           {filtered.length === 0 ? (
             <div className="text-center py-16 text-charcoal-400">
@@ -879,14 +896,11 @@ export default function CustomerIntelligence({
                           <td className="px-4 py-4">
                             <p className="font-medium text-charcoal-700">{c.first_name} {c.last_name}</p>
                             <p className="text-xs text-charcoal-400 mt-0.5 flex items-center gap-1.5">
-                              {isEmailHidden ? '••••••••••' : c.email}
-                              <button
-                                onClick={(e) => toggleEmailVisibility(c.id, e)}
-                                className="text-charcoal-300 hover:text-terracotta-500 transition-colors"
-                                title={isEmailHidden ? 'Show email' : 'Hide email'}
-                              >
-                                {isEmailHidden ? <EyeOff size={11} /> : <Eye size={11} />}
-                              </button>
+                              <MaskedEmail
+                                email={c.email}
+                                hidden={isEmailHidden}
+                                onToggle={(e) => toggleEmailVisibility(c.id, e)}
+                              />
                               {c.email_marketing_consent?.state === 'subscribed' && (
                                 <span className="px-1.5 py-0 rounded-full text-[10px] font-medium bg-olive-100 text-olive-600">✉ sub</span>
                               )}
@@ -894,12 +908,17 @@ export default function CustomerIntelligence({
                             {(() => {
                               const cohort = cohortById.get(c.id)
                               const cohortMeta = cohort ? SEGMENT_META[cohort] : null
-                              if (!cohortMeta && c.productTags.length === 0) return null
+                              if (!cohortMeta && c.productTags.length === 0 && !c.country) return null
                               return (
                                 <div className="flex flex-wrap gap-1 mt-1.5">
                                   {cohortMeta && (
                                     <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium ${cohortMeta.bg} ${cohortMeta.text} border ${cohortMeta.border}`}>
                                       {cohort}
+                                    </span>
+                                  )}
+                                  {c.country && (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-teal-50 text-teal-700 border border-teal-200">
+                                      {c.country}
                                     </span>
                                   )}
                                   {c.productTags.map((tag) => (

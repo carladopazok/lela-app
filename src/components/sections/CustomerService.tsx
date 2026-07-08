@@ -6,6 +6,7 @@ import {
   Edit2, Check, X, Loader2, Inbox, BookOpen, ChevronDown, ChevronLeft, ChevronRight, Tag, User,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
+import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import type { CSTicket, CSMacro, TicketStatus, TicketTag } from '@/types'
 import { TICKET_TAGS } from '@/types'
 
@@ -40,6 +41,8 @@ function TicketDetail({
   hasNext,
   onTagCreated,
   onNavigateToCustomer,
+  emailHidden,
+  onToggleEmail,
 }: {
   ticket: CSTicket
   macros: CSMacro[]
@@ -54,6 +57,8 @@ function TicketDetail({
   hasNext: boolean
   onTagCreated: (tag: string) => void
   onNavigateToCustomer?: (email: string) => void
+  emailHidden: boolean
+  onToggleEmail: () => void
 }) {
   const [ticket, setTicket] = useState(initial)
   const [replyBody, setReplyBody] = useState('')
@@ -205,7 +210,13 @@ function TicketDetail({
         <p className="text-sm text-charcoal-400">
           From <span className="text-charcoal-600 font-medium">{ticket.fromName}</span>
           {' '}·{' '}
-          <a href={`mailto:${ticket.from}`} className="text-terracotta-500 hover:underline">{ticket.from}</a>
+          <MaskedEmail
+            email={ticket.from}
+            hidden={emailHidden}
+            onToggle={onToggleEmail}
+            mailto
+            className="text-terracotta-500"
+          />
           {' '}·{' '}{fmtDate(ticket.receivedAt)}
         </p>
 
@@ -773,6 +784,21 @@ export default function CustomerService({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [bulkMoving, setBulkMoving] = useState(false)
+  const [hiddenEmails, setHiddenEmails] = useState<Set<string>>(new Set())
+
+  function toggleEmailVisibility(email: string) {
+    const key = email.toLowerCase()
+    setHiddenEmails((prev) => {
+      const next = new Set(prev)
+      next.has(key) ? next.delete(key) : next.add(key)
+      return next
+    })
+  }
+
+  const allEmailsHidden = tickets.length > 0 && tickets.every((t) => hiddenEmails.has(t.from.toLowerCase()))
+  function toggleAllEmails() {
+    setHiddenEmails(allEmailsHidden ? new Set() : new Set(tickets.map((t) => t.from.toLowerCase())))
+  }
 
   const loadTickets = useCallback(async () => {
     setLoading(true)
@@ -994,14 +1020,17 @@ export default function CustomerService({
                       </button>
                     ))}
                   </div>
-                  <button
-                    onClick={sync}
-                    disabled={syncing}
-                    className="flex items-center gap-2 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-terracotta-100 disabled:opacity-50"
-                  >
-                    <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
-                    {syncing ? 'Syncing…' : 'Sync inbox'}
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <HideAllEmailsButton allHidden={allEmailsHidden} onClick={toggleAllEmails} />
+                    <button
+                      onClick={sync}
+                      disabled={syncing}
+                      className="flex items-center gap-2 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-terracotta-100 disabled:opacity-50"
+                    >
+                      <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+                      {syncing ? 'Syncing…' : 'Sync inbox'}
+                    </button>
+                  </div>
                 </div>
 
                 {selectedIds.size > 0 && (
@@ -1086,9 +1115,15 @@ export default function CustomerService({
                               className="rounded border-sand-400 text-terracotta-500 focus:ring-terracotta-300 cursor-pointer"
                             />
                           </td>
-                          <td className="px-4 py-4">
+                          <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
                             <p className="font-medium text-charcoal-700">{t.fromName}</p>
-                            <p className="text-xs text-charcoal-400 mt-0.5">{t.from}</p>
+                            <p className="text-xs text-charcoal-400 mt-0.5">
+                              <MaskedEmail
+                                email={t.from}
+                                hidden={hiddenEmails.has(t.from.toLowerCase())}
+                                onToggle={() => toggleEmailVisibility(t.from)}
+                              />
+                            </p>
                           </td>
                           <td className="px-4 py-4 text-charcoal-600 max-w-xs truncate">{t.subject}</td>
                           <td className="px-4 py-4 text-charcoal-400 whitespace-nowrap">{fmtDate(t.receivedAt)}</td>
@@ -1133,6 +1168,8 @@ export default function CustomerService({
                 onBack={() => setSelectedTicket(null)}
                 onTagCreated={(tag) => setCustomTags((prev) => prev.includes(tag) ? prev : [...prev, tag])}
                 onNavigateToCustomer={onNavigateToCustomer}
+                emailHidden={hiddenEmails.has(selectedTicket.from.toLowerCase())}
+                onToggleEmail={() => toggleEmailVisibility(selectedTicket.from)}
                 onUpdated={(updated) => {
                   setTickets((prev) => prev.map((t) => t.id === updated.id ? updated : t))
                   setSelectedTicket(updated)
