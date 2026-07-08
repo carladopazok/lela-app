@@ -4,6 +4,7 @@ interface TaggingInput {
   totalSpent: number
   ordersCount: number
   lastOrderDate: Date | null
+  abandonedCheckoutsCount: number
 }
 
 const WINBACK_DAYS = 365
@@ -13,18 +14,17 @@ export function computeTags(input: TaggingInput): CustomerTag[] {
 
   if (input.ordersCount === 0) {
     tags.push('never-purchased')
-    return tags
-  }
-
-  tags.push('VIP')
-
-  if (input.ordersCount === 1) {
+  } else if (input.ordersCount === 1) {
     tags.push('1-order')
     if (input.lastOrderDate) {
       const daysSince = (Date.now() - input.lastOrderDate.getTime()) / 86_400_000
       if (daysSince <= WINBACK_DAYS) tags.push('winback')
     }
+  } else {
+    tags.push('VIP')
   }
+
+  if (input.abandonedCheckoutsCount > 0) tags.push('abandoned-checkout')
 
   return tags
 }

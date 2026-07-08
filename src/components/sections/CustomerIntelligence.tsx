@@ -11,6 +11,7 @@ import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import RFMAnalysis from '@/components/sections/RFMAnalysis'
 import Segments from '@/components/sections/Segments'
 import { computeRFM, SEGMENT_META } from '@/lib/rfm'
+import type { RFMSegment } from '@/lib/rfm'
 import type { EnrichedCustomer, ShopifyOrder, CSTicket } from '@/types'
 import { CUSTOMER_TAGS } from '@/types'
 
@@ -23,10 +24,16 @@ function fmt(n: number) {
   return `€${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-// Tags actually pushed to Shopify/Omnisend on sync: behavioral tags + one
-// per purchased product category, so category segments are targetable in campaigns.
-function syncableTags(c: EnrichedCustomer): string[] {
-  return [...c.computedTags, ...c.manualTags, ...c.productTags.map((t) => `category-${t}`)]
+// Tags actually pushed to Shopify/Omnisend on sync: behavioral tags, one per
+// purchased product category, and the customer's cohort — so every segment
+// shown in the Segments tab is targetable as a real tag in campaigns.
+function syncableTags(c: EnrichedCustomer, cohort?: RFMSegment): string[] {
+  return [
+    ...c.computedTags,
+    ...c.manualTags,
+    ...c.productTags.map((t) => `category-${t}`),
+    ...(cohort ? [`cohort-${cohort}`] : []),
+  ]
 }
 
 const TICKET_STATUS_STYLES: Record<string, string> = {
@@ -171,7 +178,7 @@ function CustomerExpandedDetail({
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 mb-4">
+      <div className="grid grid-cols-4 gap-4 mb-4">
         {/* Tags */}
         <div className="bg-white rounded-xl p-4 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">Tags</p>
@@ -337,6 +344,43 @@ function CustomerExpandedDetail({
                   </li>
                 )
               })}
+            </ul>
+          )}
+        </div>
+
+        {/* Abandoned Checkouts */}
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3 flex items-center gap-1.5">
+            <AlertCircle size={11} /> Abandoned Checkouts
+          </p>
+          {customer.abandonedCheckouts.length === 0 ? (
+            <p className="text-xs text-charcoal-300 italic">None.</p>
+          ) : (
+            <ul className="space-y-2.5">
+              {customer.abandonedCheckouts
+                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                .map((co) => (
+                  <li key={co.id} className="text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-charcoal-600">{formatDate(co.createdAt)}</span>
+                      <span className="font-medium text-charcoal-700">{fmt(parseFloat(co.totalPrice))}</span>
+                    </div>
+                    <p className="text-charcoal-400 truncate mt-0.5">
+                      {co.lineItems.map((li) => li.title).join(', ') || 'No items'}
+                    </p>
+                    {co.recoveryUrl && (
+                      <a
+                        href={co.recoveryUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex items-center gap-0.5 text-red-500 hover:text-red-600 hover:underline mt-0.5"
+                      >
+                        Recovery link <ExternalLink size={9} className="opacity-60" />
+                      </a>
+                    )}
+                  </li>
+                ))}
             </ul>
           )}
         </div>
@@ -641,7 +685,7 @@ export default function CustomerIntelligence({
   async function syncCustomerTags(customer: EnrichedCustomer, e: React.MouseEvent) {
     e.stopPropagation()
     setSyncingId(customer.id)
-    const allTags = syncableTags(customer)
+    const allTags = syncableTags(customer, cohortById.get(customer.id))
     try {
       await fetch(`/api/shopify/customers/${customer.id}/tags`, {
         method: 'PUT',
@@ -664,7 +708,7 @@ export default function CustomerIntelligence({
   async function syncAllTags() {
     setBulkSyncing(true)
     for (const c of customers.filter((c) => c.computedTags.length > 0 || c.manualTags.length > 0 || c.productTags.length > 0)) {
-      const allTags = syncableTags(c)
+      const allTags = syncableTags(c, cohortById.get(c.id))
       await fetch(`/api/shopify/customers/${c.id}/tags`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -753,10 +797,11 @@ export default function CustomerIntelligence({
           <div className="bg-white rounded-2xl shadow-card p-5 mb-6">
             <h3 className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">Tagging Logic</h3>
             <div className="grid grid-cols-2 gap-3 text-sm text-charcoal-500">
-              <div className="flex items-start gap-2"><TagBadge tag="VIP" /><span>At least 1 order</span></div>
+              <div className="flex items-start gap-2"><TagBadge tag="VIP" /><span>At least 2 orders</span></div>
               <div className="flex items-start gap-2"><TagBadge tag="1-order" /><span>Purchased exactly once</span></div>
               <div className="flex items-start gap-2"><TagBadge tag="never-purchased" /><span>0 orders</span></div>
               <div className="flex items-start gap-2"><TagBadge tag="winback" /><span>1 order in last 365 days, no return</span></div>
+              <div className="flex items-start gap-2"><TagBadge tag="abandoned-checkout" /><span>Has an open abandoned checkout</span></div>
             </div>
           </div>
 
@@ -816,7 +861,7 @@ export default function CustomerIntelligence({
                 </thead>
                 <tbody className="divide-y divide-sand-200">
                   {sorted.map((c) => {
-                    const allTags = syncableTags(c)
+                    const allTags = syncableTags(c, cohortById.get(c.id))
                     const isExpanded = expandedId === c.id
                     const isEmailHidden = hiddenEmailIds.has(c.id)
                     const customerTickets = ticketsByEmail.get(c.email.toLowerCase()) ?? []

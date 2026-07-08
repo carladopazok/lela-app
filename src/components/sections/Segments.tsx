@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { X, ChevronDown, Folder } from 'lucide-react'
+import { X, ChevronDown, Folder, Send, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 import { computeRFM, SEGMENT_ORDER, SEGMENT_META } from '@/lib/rfm'
 import type { RFMSegment } from '@/lib/rfm'
 import type { EnrichedCustomer } from '@/types'
@@ -15,6 +15,20 @@ function formatDate(iso: string | null) {
 type SegmentType = 'category' | 'cohort' | 'tag'
 interface Selection { type: SegmentType; value: string }
 
+const GROUP_LABELS: Record<SegmentType, string> = {
+  category: 'Category',
+  cohort: 'Cohort',
+  tag: 'Tag',
+}
+
+// Matches the `lela-<rawTag>` convention already pushed by the customer tag sync
+// in CustomerIntelligence.tsx, so a segment here matches real synced contacts.
+function rawTagForSelection(sel: Selection): string {
+  if (sel.type === 'category') return `category-${sel.value}`
+  if (sel.type === 'cohort') return `cohort-${sel.value}`
+  return sel.value
+}
+
 const CATEGORY_STYLE = { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-400' }
 
 const TAG_STYLES: Record<string, { bg: string; text: string; border: string }> = {
@@ -22,6 +36,7 @@ const TAG_STYLES: Record<string, { bg: string; text: string; border: string }> =
   '1-order':         { bg: 'bg-olive-50',      text: 'text-olive-700',      border: 'border-olive-400' },
   'never-purchased': { bg: 'bg-sand-100',      text: 'text-charcoal-600',   border: 'border-sand-400' },
   winback:           { bg: 'bg-amber-50',      text: 'text-amber-700',      border: 'border-amber-400' },
+  'abandoned-checkout': { bg: 'bg-red-50',     text: 'text-red-600',        border: 'border-red-400' },
 }
 const CUSTOM_TAG_STYLE = { bg: 'bg-violet-50', text: 'text-violet-700', border: 'border-violet-400' }
 
@@ -85,6 +100,8 @@ export default function Segments({
 }) {
   const [selected, setSelected] = useState<Selection | null>(null)
   const [openGroups, setOpenGroups] = useState<Set<SegmentType>>(new Set())
+  const [creatingSegment, setCreatingSegment] = useState(false)
+  const [segmentResult, setSegmentResult] = useState<{ ok: boolean; message: string } | null>(null)
   const total = customers.length
 
   function toggleGroup(type: SegmentType) {
@@ -96,7 +113,33 @@ export default function Segments({
   }
 
   function toggle(type: SegmentType, value: string) {
+    setSegmentResult(null)
     setSelected((prev) => (prev && prev.type === type && prev.value === value ? null : { type, value }))
+  }
+
+  async function createOmnisendSegment() {
+    if (!selected) return
+    setCreatingSegment(true)
+    setSegmentResult(null)
+    try {
+      const name = `Lela: ${GROUP_LABELS[selected.type]} — ${selected.value}`
+      const tag = `lela-${rawTagForSelection(selected)}`
+      const res = await fetch('/api/omnisend/segments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, tag }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Failed to create segment')
+      setSegmentResult({
+        ok: true,
+        message: data.alreadyExisted ? 'Segment already exists in Omnisend' : 'Segment created in Omnisend',
+      })
+    } catch (e) {
+      setSegmentResult({ ok: false, message: e instanceof Error ? e.message : 'Failed to create segment' })
+    } finally {
+      setCreatingSegment(false)
+    }
   }
 
   // ── By product purchased ──────────────────────────────────────────────────
@@ -240,12 +283,28 @@ export default function Segments({
               : `All Customers · ${total}`}
           </p>
           {selected && (
-            <button
-              onClick={() => setSelected(null)}
-              className="flex items-center gap-1 text-xs text-charcoal-400 hover:text-charcoal-600"
-            >
-              <X size={12} /> Clear filter
-            </button>
+            <div className="flex items-center gap-3">
+              {segmentResult && (
+                <span className={`flex items-center gap-1 text-xs ${segmentResult.ok ? 'text-olive-600' : 'text-red-500'}`}>
+                  {segmentResult.ok ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
+                  {segmentResult.message}
+                </span>
+              )}
+              <button
+                onClick={createOmnisendSegment}
+                disabled={creatingSegment}
+                className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-olive-500 hover:bg-olive-600 text-white transition-colors disabled:opacity-60"
+              >
+                {creatingSegment ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+                Create Omnisend Segment
+              </button>
+              <button
+                onClick={() => setSelected(null)}
+                className="flex items-center gap-1 text-xs text-charcoal-400 hover:text-charcoal-600"
+              >
+                <X size={12} /> Clear filter
+              </button>
+            </div>
           )}
         </div>
 

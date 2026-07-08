@@ -4,7 +4,7 @@ import { createShopifyClient } from '@/lib/shopify'
 import { computeTags } from '@/lib/tagging'
 import { readManualTags } from '@/lib/customer-tags-storage'
 import { readProductCategories } from '@/lib/product-categories-storage'
-import type { ShopifyCustomer, ShopifyOrder, EnrichedCustomer } from '@/types'
+import type { ShopifyCustomer, ShopifyOrder, ShopifyAbandonedCheckout, AbandonedCheckoutSummary, EnrichedCustomer } from '@/types'
 
 export async function GET() {
   const session = getSession()
@@ -17,7 +17,7 @@ export async function GET() {
     const manualTagsMap = readManualTags()
     const productCategoryMap = readProductCategories()
 
-    const [customers, recentOrders] = await Promise.all([
+    const [customers, recentOrders, abandonedCheckouts] = await Promise.all([
       shopify.getAll<ShopifyCustomer>('/customers.json', 'customers', {
         fields: 'id,first_name,last_name,email,phone,orders_count,total_spent,note,tags,created_at,updated_at,last_order_id,last_order_name,email_marketing_consent',
       }),
@@ -26,7 +26,26 @@ export async function GET() {
         created_at_min: yearAgo,
         fields: 'id,customer,created_at,financial_status,line_items',
       }),
+      shopify.getAll<ShopifyAbandonedCheckout>('/checkouts.json', 'checkouts', {
+        status: 'open',
+        created_at_min: yearAgo,
+      }),
     ])
+
+    const abandonedCheckoutsMap = new Map<number, AbandonedCheckoutSummary[]>()
+    for (const checkout of abandonedCheckouts) {
+      if (!checkout.customer) continue
+      const cid = checkout.customer.id
+      const list = abandonedCheckoutsMap.get(cid) ?? []
+      list.push({
+        id: checkout.id,
+        createdAt: checkout.created_at,
+        totalPrice: checkout.total_price,
+        recoveryUrl: checkout.abandoned_checkout_url,
+        lineItems: (checkout.line_items ?? []).map((li) => ({ title: li.title, quantity: li.quantity })),
+      })
+      abandonedCheckoutsMap.set(cid, list)
+    }
 
     // Try to pull real product tags from Shopify (needs read_products scope — falls
     // back to product_type/vendor from the order line items if it's not granted).
@@ -88,10 +107,13 @@ export async function GET() {
       const totalSpent = parseFloat(c.total_spent)
       const lastOrderDate = lastOrderMap.get(c.id) ?? null
 
+      const customerAbandonedCheckouts = abandonedCheckoutsMap.get(c.id) ?? []
+
       const computedTags = computeTags({
         totalSpent,
         ordersCount: c.orders_count,
         lastOrderDate,
+        abandonedCheckoutsCount: customerAbandonedCheckouts.length,
       })
 
       return {
@@ -101,6 +123,7 @@ export async function GET() {
         computedTags,
         manualTags: manualTagsMap[String(c.id)] ?? [],
         productTags: Array.from(productTypesMap.get(c.id) ?? []),
+        abandonedCheckouts: customerAbandonedCheckouts,
       }
     })
 

@@ -3,6 +3,7 @@ const PREDEFINED: Record<string, { label: string; classes: string }> = {
   '1-order':        { label: '1 Order',         classes: 'bg-olive-100 text-olive-600 border border-olive-200' },
   'never-purchased':{ label: 'Never Purchased', classes: 'bg-sand-100 text-charcoal-500 border border-sand-300' },
   winback:          { label: 'Winback',         classes: 'bg-amber-50 text-amber-700 border border-amber-200' },
+  'abandoned-checkout': { label: 'Abandoned Checkout', classes: 'bg-red-50 text-red-600 border border-red-200' },
 }
 
 const CUSTOM_CLASSES = 'bg-violet-50 text-violet-700 border border-violet-200'

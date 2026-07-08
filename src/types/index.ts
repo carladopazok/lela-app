@@ -48,6 +48,24 @@ export interface ShopifyOrder {
   }>
 }
 
+export interface ShopifyAbandonedCheckout {
+  id: number
+  email: string | null
+  created_at: string
+  total_price: string
+  abandoned_checkout_url: string | null
+  customer: { id: number } | null
+  line_items: Array<{ title: string; quantity: number }>
+}
+
+export interface AbandonedCheckoutSummary {
+  id: number
+  createdAt: string
+  totalPrice: string
+  recoveryUrl: string | null
+  lineItems: Array<{ title: string; quantity: number }>
+}
+
 export interface ShopifyCustomer {
   id: number
   first_name: string
@@ -105,7 +123,7 @@ export interface OmnisendContact {
 
 // ─── App-level ──────────────────────────────────────────────────────────────
 
-export const CUSTOMER_TAGS = ['VIP', '1-order', 'never-purchased', 'winback'] as const
+export const CUSTOMER_TAGS = ['VIP', '1-order', 'never-purchased', 'winback', 'abandoned-checkout'] as const
 export type CustomerTag = string
 
 export interface EnrichedCustomer extends ShopifyCustomer {
@@ -114,6 +132,7 @@ export interface EnrichedCustomer extends ShopifyCustomer {
   computedTags: CustomerTag[]
   manualTags: string[]
   productTags: string[]   // unique product_type values from purchase history
+  abandonedCheckouts: AbandonedCheckoutSummary[]
 }
 
 export interface LateShipment {
