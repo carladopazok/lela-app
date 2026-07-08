@@ -11,6 +11,18 @@ import AboutTool from '@/components/sections/AboutTool'
 
 export default function Home() {
   const [active, setActive] = useState<SectionId>('sales-overview')
+  const [openTicketId, setOpenTicketId] = useState<string | null>(null)
+  const [openCustomerEmail, setOpenCustomerEmail] = useState<string | null>(null)
+
+  function goToTicket(ticketId: string) {
+    setOpenTicketId(ticketId)
+    setActive('customer-service')
+  }
+
+  function goToCustomer(email: string) {
+    setOpenCustomerEmail(email)
+    setActive('customer-intelligence')
+  }
 
   return (
     <div className="flex min-h-screen bg-cream-100">
@@ -21,8 +33,20 @@ export default function Home() {
           {active === 'sales-overview'        && <SalesOverview />}
           {active === 'late-shipments'        && <LateShipments />}
           {active === 'email-performance'     && <EmailPerformance />}
-          {active === 'customer-intelligence' && <CustomerIntelligence />}
-          {active === 'customer-service'      && <CustomerService />}
+          {active === 'customer-intelligence' && (
+            <CustomerIntelligence
+              openCustomerEmail={openCustomerEmail}
+              onOpenCustomerHandled={() => setOpenCustomerEmail(null)}
+              onNavigateToTicket={goToTicket}
+            />
+          )}
+          {active === 'customer-service' && (
+            <CustomerService
+              openTicketId={openTicketId}
+              onOpenTicketHandled={() => setOpenTicketId(null)}
+              onNavigateToCustomer={goToCustomer}
+            />
+          )}
           {active === 'about'                 && <AboutTool />}
         </div>
       </main>

@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from 'react'
 import {
   Search, RefreshCw, AlertCircle, Tag, CheckCircle2, Loader2,
   X, Check, Lock, ChevronDown, ShoppingBag, Mail, Package, ExternalLink,
-  ArrowUp, ArrowDown, ArrowUpDown,
+  ArrowUp, ArrowDown, ArrowUpDown, Eye, EyeOff,
 } from 'lucide-react'
 import TagBadge from '@/components/ui/TagBadge'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
@@ -34,23 +34,25 @@ function CustomerExpandedDetail({
   customer,
   customTagTypes,
   productCategories,
+  tickets,
   onTagToggled,
   onTagCreated,
   onCategoryAssigned,
+  onNavigateToTicket,
 }: {
   customer: EnrichedCustomer
   customTagTypes: string[]
   productCategories: Record<string, string>
+  tickets: CSTicket[]
   onTagToggled: (customer: EnrichedCustomer, tag: string) => Promise<void>
   onTagCreated: (tag: string) => void
   onCategoryAssigned: (title: string, category: string | null) => void
+  onNavigateToTicket?: (ticketId: string) => void
 }) {
   const [orders, setOrders] = useState<ShopifyOrder[]>([])
   const [shop, setShop] = useState<string | null>(null)
-  const [tickets, setTickets] = useState<CSTicket[]>([])
   const [loadingOrders, setLoadingOrders] = useState(true)
   const [ordersError, setOrdersError] = useState<string | null>(null)
-  const [loadingTickets, setLoadingTickets] = useState(true)
   const [addingTag, setAddingTag] = useState(false)
   const [newTagValue, setNewTagValue] = useState('')
   const [savingTag, setSavingTag] = useState(false)
@@ -68,16 +70,7 @@ function CustomerExpandedDetail({
         setLoadingOrders(false)
       })
       .catch((e) => { setOrdersError(e.message ?? 'Failed to load orders'); setLoadingOrders(false) })
-    fetch('/api/cs/tickets')
-      .then((r) => r.json())
-      .then((d) => {
-        const matched = (d.tickets ?? [] as CSTicket[]).filter(
-          (t: CSTicket) => t.from.toLowerCase() === customer.email.toLowerCase()
-        )
-        setTickets(matched)
-        setLoadingTickets(false)
-      })
-  }, [customer.id, customer.email])
+  }, [customer.id])
 
   async function toggleTag(tag: string) {
     if (localCustomer.computedTags.includes(tag)) return
@@ -114,10 +107,13 @@ function CustomerExpandedDetail({
         if (existing) {
           existing.qty += item.quantity
         } else {
+          const category = item.tags && item.tags.length > 0
+            ? item.tags.join(', ')
+            : item.product_type?.trim() || ''
           map.set(item.title, {
             qty: item.quantity,
             image_url: item.image_url ?? null,
-            category: item.product_type?.trim() ?? '',
+            category,
           })
         }
       }
@@ -342,20 +338,23 @@ function CustomerExpandedDetail({
           <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3 flex items-center gap-1.5">
             <Mail size={11} /> Tickets
           </p>
-          {loadingTickets ? (
-            <p className="text-xs text-charcoal-400">Loading…</p>
-          ) : tickets.length === 0 ? (
+          {tickets.length === 0 ? (
             <p className="text-xs text-charcoal-300 italic">No tickets.</p>
           ) : (
             <ul className="space-y-1.5">
               {tickets
                 .sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime())
                 .map((t) => (
-                  <li key={t.id} className="flex items-center justify-between gap-2 text-xs">
-                    <span className="text-charcoal-600 truncate">{t.subject}</span>
-                    <span className={`shrink-0 px-1.5 py-0.5 rounded-full text-xs font-medium capitalize ${TICKET_STATUS_STYLES[t.status] ?? 'bg-sand-100 text-charcoal-500'}`}>
-                      {t.status}
-                    </span>
+                  <li key={t.id}>
+                    <button
+                      onClick={() => onNavigateToTicket?.(t.id)}
+                      className="w-full flex items-center justify-between gap-2 text-xs text-left hover:text-terracotta-600 transition-colors"
+                    >
+                      <span className="text-charcoal-600 truncate">{t.subject}</span>
+                      <span className={`shrink-0 px-1.5 py-0.5 rounded-full text-xs font-medium capitalize ${TICKET_STATUS_STYLES[t.status] ?? 'bg-sand-100 text-charcoal-500'}`}>
+                        {t.status}
+                      </span>
+                    </button>
                   </li>
                 ))}
             </ul>
@@ -437,10 +436,19 @@ function CustomerExpandedDetail({
 
 // ─── Main section ─────────────────────────────────────────────────────────────
 
-export default function CustomerIntelligence() {
+export default function CustomerIntelligence({
+  openCustomerEmail,
+  onOpenCustomerHandled,
+  onNavigateToTicket,
+}: {
+  openCustomerEmail?: string | null
+  onOpenCustomerHandled?: () => void
+  onNavigateToTicket?: (ticketId: string) => void
+} = {}) {
   const [customers, setCustomers] = useState<EnrichedCustomer[]>([])
   const [customTagTypes, setCustomTagTypes] = useState<string[]>([])
   const [productCategories, setProductCategories] = useState<Record<string, string>>({})
+  const [tickets, setTickets] = useState<CSTicket[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -455,23 +463,27 @@ export default function CustomerIntelligence() {
   const [addTagValue, setAddTagValue] = useState('')
   const [sortKey, setSortKey] = useState<'name' | 'orders' | 'aov' | 'lastOrder' | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [hiddenEmailIds, setHiddenEmailIds] = useState<Set<number>>(new Set())
 
   async function load() {
     setLoading(true)
     setError(null)
     try {
-      const [custRes, typesRes, catRes] = await Promise.all([
+      const [custRes, typesRes, catRes, ticketRes] = await Promise.all([
         fetch('/api/shopify/customers'),
         fetch('/api/shopify/customer-tag-types'),
         fetch('/api/shopify/product-categories'),
+        fetch('/api/cs/tickets'),
       ])
       const custData = await custRes.json()
       const typesData = await typesRes.json()
       const catData = await catRes.json()
+      const ticketData = await ticketRes.json()
       if (!custRes.ok) throw new Error(custData.error)
       setCustomers(custData.customers)
       setCustomTagTypes(typesData.types ?? [])
       setProductCategories(catData.categories ?? {})
+      setTickets(ticketData.tickets ?? [])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -480,6 +492,36 @@ export default function CustomerIntelligence() {
   }
 
   useEffect(() => { load() }, [])
+
+  useEffect(() => {
+    if (!openCustomerEmail || loading) return
+    const found = customers.find((c) => c.email.toLowerCase() === openCustomerEmail.toLowerCase())
+    if (found) {
+      setExpandedId(found.id)
+      document.getElementById(`customer-row-${found.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+    onOpenCustomerHandled?.()
+  }, [openCustomerEmail, loading, customers, onOpenCustomerHandled])
+
+  const ticketsByEmail = useMemo(() => {
+    const map = new Map<string, CSTicket[]>()
+    for (const t of tickets) {
+      const key = t.from.toLowerCase()
+      const list = map.get(key) ?? []
+      list.push(t)
+      map.set(key, list)
+    }
+    return map
+  }, [tickets])
+
+  function toggleEmailVisibility(id: number, e: React.MouseEvent) {
+    e.stopPropagation()
+    setHiddenEmailIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
 
   async function handleCategoryAssigned(title: string, category: string | null) {
     if (category) {
@@ -805,6 +847,7 @@ export default function CustomerIntelligence() {
                         </button>
                       </th>
                     ))}
+                    <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Tickets</th>
                     <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Tags</th>
                     <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400 text-right">Sync</th>
                   </tr>
@@ -813,10 +856,13 @@ export default function CustomerIntelligence() {
                   {sorted.map((c) => {
                     const allTags = [...c.computedTags, ...c.manualTags]
                     const isExpanded = expandedId === c.id
+                    const isEmailHidden = hiddenEmailIds.has(c.id)
+                    const customerTickets = ticketsByEmail.get(c.email.toLowerCase()) ?? []
                     return (
                       <>
                         <tr
                           key={c.id}
+                          id={`customer-row-${c.id}`}
                           onClick={() => setExpandedId(isExpanded ? null : c.id)}
                           className={`cursor-pointer transition-colors ${isExpanded ? 'bg-sand-50' : 'hover:bg-cream-100'}`}
                         >
@@ -826,15 +872,52 @@ export default function CustomerIntelligence() {
                           <td className="px-4 py-4">
                             <p className="font-medium text-charcoal-700">{c.first_name} {c.last_name}</p>
                             <p className="text-xs text-charcoal-400 mt-0.5 flex items-center gap-1.5">
-                              {c.email}
+                              {isEmailHidden ? '••••••••••' : c.email}
+                              <button
+                                onClick={(e) => toggleEmailVisibility(c.id, e)}
+                                className="text-charcoal-300 hover:text-terracotta-500 transition-colors"
+                                title={isEmailHidden ? 'Show email' : 'Hide email'}
+                              >
+                                {isEmailHidden ? <EyeOff size={11} /> : <Eye size={11} />}
+                              </button>
                               {c.email_marketing_consent?.state === 'subscribed' && (
                                 <span className="px-1.5 py-0 rounded-full text-[10px] font-medium bg-olive-100 text-olive-600">✉ sub</span>
                               )}
                             </p>
+                            {c.productTags && c.productTags.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1.5">
+                                {c.productTags.map((tag) => (
+                                  <span
+                                    key={`cat-${tag}`}
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-4 text-charcoal-700 font-medium">{c.orders_count}</td>
                           <td className="px-4 py-4 text-charcoal-700">€{c.aov.toFixed(2)}</td>
                           <td className="px-4 py-4 text-charcoal-500">{formatDate(c.lastOrderDate)}</td>
+                          <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
+                            {customerTickets.length === 0 ? (
+                              <span className="text-xs text-charcoal-300">—</span>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  const mostRecent = [...customerTickets].sort(
+                                    (a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
+                                  )[0]
+                                  onNavigateToTicket?.(mostRecent.id)
+                                }}
+                                className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-lg bg-sand-100 text-charcoal-500 hover:bg-terracotta-100 hover:text-terracotta-600 transition-colors"
+                              >
+                                <Mail size={11} />
+                                {customerTickets.length}
+                              </button>
+                            )}
+                          </td>
                           <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
                             <div className="flex flex-wrap gap-1 items-center">
                               {c.computedTags.map((tag) => (
@@ -922,14 +1005,16 @@ export default function CustomerIntelligence() {
 
                         {isExpanded && (
                           <tr key={`${c.id}-expanded`}>
-                            <td colSpan={7} className="border-b border-sand-200">
+                            <td colSpan={8} className="border-b border-sand-200">
                               <CustomerExpandedDetail
                                 customer={c}
                                 customTagTypes={customTagTypes}
                                 productCategories={productCategories}
+                                tickets={customerTickets}
                                 onTagToggled={toggleManualTag}
                                 onTagCreated={(tag) => setCustomTagTypes((prev) => prev.includes(tag) ? prev : [...prev, tag])}
                                 onCategoryAssigned={handleCategoryAssigned}
+                                onNavigateToTicket={onNavigateToTicket}
                               />
                             </td>
                           </tr>

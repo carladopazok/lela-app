@@ -8,6 +8,8 @@ export interface ShopifyLineItem {
   variant_title: string | null
   product_id: number | null
   product_type: string
+  vendor: string
+  tags: string[]
   image_url: string | null
 }
 

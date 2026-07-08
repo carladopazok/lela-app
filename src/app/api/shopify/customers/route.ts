@@ -28,7 +28,35 @@ export async function GET() {
       }),
     ])
 
-    // Build maps: customerId → last order date, customerId → purchased product types
+    // Try to pull real product tags from Shopify (needs read_products scope — falls
+    // back to product_type/vendor from the order line items if it's not granted).
+    const productIds = [
+      ...new Set(
+        recentOrders.flatMap((o) => (o.line_items ?? []).map((li) => li.product_id).filter((id): id is number => id != null))
+      ),
+    ]
+    const productTagsMap = new Map<number, string[]>()
+    if (productIds.length > 0) {
+      try {
+        const CHUNK = 200
+        for (let i = 0; i < productIds.length; i += CHUNK) {
+          const chunk = productIds.slice(i, i + CHUNK)
+          const data = await shopify.get<{ products: Array<{ id: number; tags: string }> }>('/products.json', {
+            ids: chunk.join(','),
+            fields: 'id,tags',
+          })
+          for (const p of data.products ?? []) {
+            const tags = (p.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean)
+            if (tags.length > 0) productTagsMap.set(p.id, tags)
+          }
+        }
+        console.log(`[customers] pulled Shopify product tags for ${productTagsMap.size}/${productIds.length} products`)
+      } catch (err) {
+        console.warn('[customers] could not fetch product tags (likely missing read_products scope):', err instanceof Error ? err.message : err)
+      }
+    }
+
+    // Build maps: customerId → last order date, customerId → purchased product categories
     const lastOrderMap = new Map<number, Date>()
     const productTypesMap = new Map<number, Set<string>>()
 
@@ -42,10 +70,16 @@ export async function GET() {
 
       const typeSet = productTypesMap.get(cid) ?? new Set<string>()
       for (const item of order.line_items ?? []) {
-        const pt = item.product_type?.trim()
-        if (pt) typeSet.add(pt)
         const manualCat = productCategoryMap[item.title]
-        if (manualCat) typeSet.add(manualCat)
+        const shopifyTags = item.product_id != null ? productTagsMap.get(item.product_id) : undefined
+        if (manualCat) {
+          typeSet.add(manualCat)
+        } else if (shopifyTags && shopifyTags.length > 0) {
+          shopifyTags.forEach((t) => typeSet.add(t))
+        } else {
+          const fallback = item.product_type?.trim()
+          if (fallback) typeSet.add(fallback)
+        }
       }
       productTypesMap.set(cid, typeSet)
     }

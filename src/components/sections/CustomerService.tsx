@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   RefreshCw, AlertCircle, Mail, ArrowLeft, Send, Plus, Trash2,
-  Edit2, Check, X, Loader2, Inbox, BookOpen, ChevronDown, ChevronLeft, ChevronRight, Tag,
+  Edit2, Check, X, Loader2, Inbox, BookOpen, ChevronDown, ChevronLeft, ChevronRight, Tag, User,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import type { CSTicket, CSMacro, TicketStatus, TicketTag } from '@/types'
@@ -39,6 +39,7 @@ function TicketDetail({
   hasPrev,
   hasNext,
   onTagCreated,
+  onNavigateToCustomer,
 }: {
   ticket: CSTicket
   macros: CSMacro[]
@@ -52,6 +53,7 @@ function TicketDetail({
   hasPrev: boolean
   hasNext: boolean
   onTagCreated: (tag: string) => void
+  onNavigateToCustomer?: (email: string) => void
 }) {
   const [ticket, setTicket] = useState(initial)
   const [replyBody, setReplyBody] = useState('')
@@ -189,7 +191,17 @@ function TicketDetail({
 
       {/* Subject + customer */}
       <div className="bg-white rounded-2xl shadow-card p-6 mb-4">
-        <h3 className="font-serif text-xl text-charcoal-700 mb-1">{ticket.subject}</h3>
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="font-serif text-xl text-charcoal-700 mb-1">{ticket.subject}</h3>
+          {onNavigateToCustomer && (
+            <button
+              onClick={() => onNavigateToCustomer(ticket.from)}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-terracotta-600 hover:text-terracotta-700 bg-terracotta-50 hover:bg-terracotta-100 border border-terracotta-200 rounded-lg transition-colors"
+            >
+              <User size={12} /> View customer profile
+            </button>
+          )}
+        </div>
         <p className="text-sm text-charcoal-400">
           From <span className="text-charcoal-600 font-medium">{ticket.fromName}</span>
           {' '}·{' '}
@@ -737,7 +749,15 @@ function TagsOverview({
 
 // ─── Main section ────────────────────────────────────────────────────────────
 
-export default function CustomerService() {
+export default function CustomerService({
+  openTicketId,
+  onOpenTicketHandled,
+  onNavigateToCustomer,
+}: {
+  openTicketId?: string | null
+  onOpenTicketHandled?: () => void
+  onNavigateToCustomer?: (email: string) => void
+} = {}) {
   const [tab, setTab] = useState<'tickets' | 'macros' | 'tags'>('tickets')
   const [tickets, setTickets] = useState<CSTicket[]>([])
   const [macros, setMacros] = useState<CSMacro[]>([])
@@ -780,6 +800,17 @@ export default function CustomerService() {
   }, [])
 
   useEffect(() => { loadTickets() }, [loadTickets])
+
+  useEffect(() => {
+    if (!openTicketId || loading) return
+    const found = tickets.find((t) => t.id === openTicketId)
+    if (found) {
+      setStatusFilter(found.status)
+      setSelectedTicket(found)
+      setTab('tickets')
+    }
+    onOpenTicketHandled?.()
+  }, [openTicketId, loading, tickets, onOpenTicketHandled])
 
   async function sync() {
     setSyncing(true)
@@ -1101,6 +1132,7 @@ export default function CustomerService() {
                 onNext={() => setSelectedTicket(filtered[idx + 1])}
                 onBack={() => setSelectedTicket(null)}
                 onTagCreated={(tag) => setCustomTags((prev) => prev.includes(tag) ? prev : [...prev, tag])}
+                onNavigateToCustomer={onNavigateToCustomer}
                 onUpdated={(updated) => {
                   setTickets((prev) => prev.map((t) => t.id === updated.id ? updated : t))
                   setSelectedTicket(updated)

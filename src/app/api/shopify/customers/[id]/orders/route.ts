@@ -30,28 +30,32 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       ),
     ]
 
-    // Attempt to batch-fetch product images — fails gracefully if read_products scope is missing
+    // Attempt to batch-fetch product images + tags — fails gracefully if read_products scope is missing
     const imageMap = new Map<number, string>()
+    const tagsMap = new Map<number, string[]>()
     if (productIds.length > 0) {
       try {
-        const data = await shopify.get<{ products: Array<{ id: number; image: { src: string } | null }> }>(
+        const data = await shopify.get<{ products: Array<{ id: number; image: { src: string } | null; tags: string }> }>(
           '/products.json',
-          { ids: productIds.join(','), fields: 'id,image' }
+          { ids: productIds.join(','), fields: 'id,image,tags' }
         )
         for (const p of data.products ?? []) {
           if (p.image?.src) imageMap.set(p.id, resizedImageUrl(p.image.src))
+          const tags = (p.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean)
+          if (tags.length > 0) tagsMap.set(p.id, tags)
         }
       } catch {
-        // read_products scope not granted — orders still returned, images just won't appear
+        // read_products scope not granted — orders still returned, images/tags just won't appear
       }
     }
 
-    // Attach image_url to each line item
+    // Attach image_url + tags to each line item
     const enriched = orders.map((o) => ({
       ...o,
       line_items: ((o.line_items as Array<Record<string, unknown>>) ?? []).map((li) => ({
         ...li,
         image_url: li.product_id ? (imageMap.get(li.product_id as number) ?? null) : null,
+        tags: li.product_id ? (tagsMap.get(li.product_id as number) ?? []) : [],
       })),
     }))
 
