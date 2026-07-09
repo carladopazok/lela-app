@@ -1,18 +1,20 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { createShopifyClient } from '@/lib/shopify'
 import { computeTags } from '@/lib/tagging'
 import { readManualTags } from '@/lib/customer-tags-storage'
 import { readProductCategories } from '@/lib/product-categories-storage'
+import { readDummyCustomers, readDummyOrders } from '@/lib/dummy-data'
 import type { ShopifyCustomer, ShopifyOrder, ShopifyAbandonedCheckout, AbandonedCheckoutSummary, EnrichedCustomer } from '@/types'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession()
   if (!session) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
   try {
     const shopify = createShopifyClient(session)
     const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString()
+    const includeDummy = req.nextUrl.searchParams.get('dummy') === '1'
 
     const manualTagsMap = readManualTags()
     const productCategoryMap = readProductCategories()
@@ -31,6 +33,11 @@ export async function GET() {
         created_at_min: yearAgo,
       }),
     ])
+
+    if (includeDummy) {
+      customers.push(...readDummyCustomers())
+      recentOrders.push(...readDummyOrders().filter((o) => new Date(o.created_at) >= new Date(yearAgo)))
+    }
 
     const abandonedCheckoutsMap = new Map<number, AbandonedCheckoutSummary[]>()
     for (const checkout of abandonedCheckouts) {

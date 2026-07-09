@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
+import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import type { CSTicket, CSMacro, TicketStatus, TicketTag } from '@/types'
 import { TICKET_TAGS } from '@/types'
 
@@ -800,12 +801,14 @@ export default function CustomerService({
     setHiddenEmails(allEmailsHidden ? new Set() : new Set(tickets.map((t) => t.from.toLowerCase())))
   }
 
+  const { includeDummy } = useDummyData()
+
   const loadTickets = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const [ticketRes, macroRes, tagRes] = await Promise.all([
-        fetch('/api/cs/tickets'),
+        fetch(withDummyParam('/api/cs/tickets', includeDummy)),
         fetch('/api/cs/macros'),
         fetch('/api/cs/tags'),
       ])
@@ -823,7 +826,7 @@ export default function CustomerService({
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [includeDummy])
 
   useEffect(() => { loadTickets() }, [loadTickets])
 

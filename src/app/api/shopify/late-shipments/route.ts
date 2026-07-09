@@ -1,9 +1,10 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { createShopifyClient } from '@/lib/shopify'
+import { readDummyOrders } from '@/lib/dummy-data'
 import type { ShopifyOrder, LateShipment } from '@/types'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession()
   if (!session) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
@@ -17,6 +18,12 @@ export async function GET() {
       created_at_max: threeDaysAgo,
       fields: 'id,name,email,created_at,line_items,customer,total_price,fulfillment_status',
     })
+
+    if (req.nextUrl.searchParams.get('dummy') === '1') {
+      orders.push(
+        ...readDummyOrders().filter((o) => o.fulfillment_status === null && o.created_at <= threeDaysAgo)
+      )
+    }
 
     const now = Date.now()
 

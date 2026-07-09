@@ -14,6 +14,7 @@ import RFMAnalysis from '@/components/sections/RFMAnalysis'
 import Segments from '@/components/sections/Segments'
 import { computeRFM, SEGMENT_META } from '@/lib/rfm'
 import type { RFMSegment } from '@/lib/rfm'
+import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import type { EnrichedCustomer, ShopifyOrder, CSTicket } from '@/types'
 import { CUSTOMER_TAGS } from '@/types'
 
@@ -78,9 +79,10 @@ function CustomerExpandedDetail({
   const [showOrders, setShowOrders] = useState(false)
   const [editingCategoryFor, setEditingCategoryFor] = useState<string | null>(null)
   const [categoryInput, setCategoryInput] = useState('')
+  const { includeDummy } = useDummyData()
 
   useEffect(() => {
-    fetch(`/api/shopify/customers/${customer.id}/orders`)
+    fetch(withDummyParam(`/api/shopify/customers/${customer.id}/orders`, includeDummy))
       .then((r) => r.json())
       .then((d) => {
         if (d.error) { setOrdersError(d.error); setOrders([]) }
@@ -88,7 +90,7 @@ function CustomerExpandedDetail({
         setLoadingOrders(false)
       })
       .catch((e) => { setOrdersError(e.message ?? 'Failed to load orders'); setLoadingOrders(false) })
-  }, [customer.id])
+  }, [customer.id, includeDummy])
 
   async function toggleTag(tag: string) {
     if (localCustomer.computedTags.includes(tag)) return
@@ -518,16 +520,17 @@ export default function CustomerIntelligence({
   const [sortKey, setSortKey] = useState<'name' | 'orders' | 'aov' | 'lastOrder' | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [hiddenEmailIds, setHiddenEmailIds] = useState<Set<number>>(new Set())
+  const { includeDummy } = useDummyData()
 
   async function load() {
     setLoading(true)
     setError(null)
     try {
       const [custRes, typesRes, catRes, ticketRes] = await Promise.all([
-        fetch('/api/shopify/customers'),
+        fetch(withDummyParam('/api/shopify/customers', includeDummy)),
         fetch('/api/shopify/customer-tag-types'),
         fetch('/api/shopify/product-categories'),
-        fetch('/api/cs/tickets'),
+        fetch(withDummyParam('/api/cs/tickets', includeDummy)),
       ])
       const custData = await custRes.json()
       const typesData = await typesRes.json()
@@ -545,7 +548,7 @@ export default function CustomerIntelligence({
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [includeDummy])
 
   useEffect(() => {
     if (!openCustomerEmail || loading) return
@@ -606,7 +609,7 @@ export default function CustomerIntelligence({
       setProductCategories(data.categories ?? {})
     }
     // Refresh customers so productTags reflects the new category
-    const custRes = await fetch('/api/shopify/customers')
+    const custRes = await fetch(withDummyParam('/api/shopify/customers', includeDummy))
     const custData = await custRes.json()
     if (custData.customers) setCustomers(custData.customers)
   }

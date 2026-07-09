@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { RefreshCw, AlertCircle } from 'lucide-react'
 import StatCard from '@/components/ui/StatCard'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
+import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import type { SalesMetrics } from '@/types'
 
 function fmt(n: number, currency: string) {
@@ -30,12 +31,13 @@ export default function SalesOverview() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeDays, setActiveDays] = useState(30)
+  const { includeDummy } = useDummyData()
 
   async function load(days: number) {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/shopify/sales-overview?days=${days}`)
+      const res = await fetch(withDummyParam(`/api/shopify/sales-overview?days=${days}`, includeDummy))
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setMetrics(data)
@@ -46,7 +48,7 @@ export default function SalesOverview() {
     }
   }
 
-  useEffect(() => { load(activeDays) }, [activeDays])
+  useEffect(() => { load(activeDays) }, [activeDays, includeDummy])
 
   function handlePeriod(days: number) {
     setActiveDays(days)

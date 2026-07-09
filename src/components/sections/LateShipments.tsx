@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
+import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import type { LateShipment } from '@/types'
 
 function formatDate(iso: string) {
@@ -13,12 +14,13 @@ export default function LateShipments() {
   const [shipments, setShipments] = useState<LateShipment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { includeDummy } = useDummyData()
 
   async function load() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/shopify/late-shipments')
+      const res = await fetch(withDummyParam('/api/shopify/late-shipments', includeDummy))
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setShipments(data.shipments)
@@ -29,7 +31,7 @@ export default function LateShipments() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [includeDummy])
 
   return (
     <section className="max-w-4xl">

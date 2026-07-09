@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { createShopifyClient } from '@/lib/shopify'
+import { readDummyOrders } from '@/lib/dummy-data'
 
 function resizedImageUrl(src: string): string {
   return src.replace(/(\.(jpe?g|png|gif|webp))(\?.*)?$/i, '_100x100$1$3')
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const session = getSession()
   if (!session) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
@@ -18,6 +19,13 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       status: 'any',
       created_at_min: '2020-01-01T00:00:00.000Z',
     })
+
+    if (req.nextUrl.searchParams.get('dummy') === '1') {
+      const customerId = Number(params.id)
+      orders.push(
+        ...(readDummyOrders().filter((o) => o.customer?.id === customerId) as unknown as Record<string, unknown>[])
+      )
+    }
 
     // Collect unique product IDs
     const productIds = [

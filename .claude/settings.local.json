@@ -2,7 +2,19 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(npx eslint *)",
+      "Bash(npm run *)",
+      "Read(//private/tmp/**)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(tail -40 /tmp/lela-dev.log)",
+      "Bash(curl -s http://localhost:3000/ -o /dev/null -w \"HTTP %{http_code}\\\\n\")",
+      "Bash(curl -s -X POST http://localhost:3000/api/dummy/generate)",
+      "Bash(tail -150 /tmp/lela-dev.log)",
+      "Bash(pkill -f \"next dev\")",
+      "Bash(rm -rf .next)"
     ]
   }
 }

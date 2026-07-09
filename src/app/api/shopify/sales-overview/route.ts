@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { createShopifyClient } from '@/lib/shopify'
 import { REVENUE_STATUSES } from '@/lib/shopify-constants'
+import { readDummyOrders } from '@/lib/dummy-data'
 import type { ShopifyOrder, SalesMetrics } from '@/types'
 
 export async function GET(req: NextRequest) {
@@ -43,6 +44,10 @@ export async function GET(req: NextRequest) {
       status: 'any',
       created_at_min: createdAtMin,
     })
+
+    if (req.nextUrl.searchParams.get('dummy') === '1') {
+      orders.push(...readDummyOrders().filter((o) => o.created_at >= createdAtMin))
+    }
 
     const statusBreakdown = orders.reduce<Record<string, number>>((acc, o) => {
       acc[o.financial_status] = (acc[o.financial_status] ?? 0) + 1

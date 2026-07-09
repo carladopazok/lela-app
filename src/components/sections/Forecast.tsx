@@ -15,6 +15,7 @@ import {
 } from 'recharts'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import StatCard from '@/components/ui/StatCard'
+import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import type { ForecastMeta, ForecastPoint } from '@/types'
 
 type Granularity = 'daily' | 'weekly' | 'monthly' | 'yearly'
@@ -212,6 +213,7 @@ export default function Forecast() {
 
   const todayIso = useMemo(() => isoDate(new Date()), [])
   const scenarioPct = parseFloat(scenarioPercent) || 0
+  const { includeDummy } = useDummyData()
 
   async function loadForecast(m: ModelType) {
     setLoading(true)
@@ -221,7 +223,7 @@ export default function Forecast() {
       start.setDate(start.getDate() - HISTORY_DAYS)
       const end = new Date()
       end.setDate(end.getDate() + FORECAST_DAYS)
-      const res = await fetch(`/api/forecast?start=${isoDate(start)}&end=${isoDate(end)}&model=${m}`)
+      const res = await fetch(withDummyParam(`/api/forecast?start=${isoDate(start)}&end=${isoDate(end)}&model=${m}`, includeDummy))
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setPoints(data.points)
@@ -245,7 +247,7 @@ export default function Forecast() {
   }
 
   useEffect(() => { loadMeta() }, [])
-  useEffect(() => { loadForecast(model) }, [model])
+  useEffect(() => { loadForecast(model) }, [model, includeDummy])
 
   async function runBackfill() {
     setSyncing(true)
