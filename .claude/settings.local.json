@@ -14,7 +14,12 @@
       "Bash(curl -s -X POST http://localhost:3000/api/dummy/generate)",
       "Bash(tail -150 /tmp/lela-dev.log)",
       "Bash(pkill -f \"next dev\")",
-      "Bash(rm -rf .next)"
+      "Bash(rm -rf .next)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"homepage: %{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(node -e ' *)",
+      "Bash(npx tsx *)",
+      "Bash(git add *)"
     ]
   }
 }

@@ -237,6 +237,9 @@ export interface ForecastPoint {
   actual: number | null
   forecast: number
   priorYear: number | null
+  actualOrderCount: number | null
+  forecastOrderCount: number
+  priorYearOrderCount: number | null
 }
 
 export interface CampaignRow {

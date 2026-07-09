@@ -3,21 +3,27 @@ import { dateRange, daysBetween, dayOfWeek, monthOf } from './date-utils'
 
 const TREND_WINDOW_DAYS = 28
 const REGRESSION_WINDOW_DAYS = 90
+const MIN_DAYS_FOR_REGRESSION = 14
 
 interface FilledDay {
   date: string
-  revenue: number
+  value: number
 }
 
+export type MetricExtractor = (row: DailyRevenue) => number
+
+export const REVENUE_METRIC: MetricExtractor = (r) => r.gross_revenue
+export const ORDER_COUNT_METRIC: MetricExtractor = (r) => r.order_count
+
 // daily_revenue only has rows for days with at least one order — days with
-// zero revenue are absent, not zero. Trend/seasonality math needs the gaps
-// filled with explicit zeros or averages get skewed upward.
-function fillGaps(sorted: DailyRevenue[]): FilledDay[] {
+// zero revenue/orders are absent, not zero. Trend/seasonality math needs the
+// gaps filled with explicit zeros or averages get skewed upward.
+function fillGaps(sorted: DailyRevenue[], valueOf: MetricExtractor): FilledDay[] {
   if (sorted.length === 0) return []
-  const byDate = new Map(sorted.map((r) => [r.date, r.gross_revenue]))
+  const byDate = new Map(sorted.map((r) => [r.date, valueOf(r)]))
   return dateRange(sorted[0].date, sorted[sorted.length - 1].date).map((date) => ({
     date,
-    revenue: byDate.get(date) ?? 0,
+    value: byDate.get(date) ?? 0,
   }))
 }
 
@@ -25,8 +31,8 @@ function trailingMovingAverage(filled: FilledDay[], window: number): number[] {
   const trend: number[] = []
   let sum = 0
   for (let i = 0; i < filled.length; i++) {
-    sum += filled[i].revenue
-    if (i >= window) sum -= filled[i - window].revenue
+    sum += filled[i].value
+    if (i >= window) sum -= filled[i - window].value
     trend.push(sum / Math.min(i + 1, window))
   }
   return trend
@@ -62,13 +68,14 @@ export interface BaselineModel {
 }
 
 /**
- * Decomposes daily_revenue into a trailing-moving-average trend plus
+ * Decomposes a daily_revenue metric (revenue by default, but any numeric
+ * column via `valueOf`) into a trailing-moving-average trend plus
  * day-of-week and month-of-year seasonal indices (ratio of actual to trend,
  * normalized so each index set averages to 1.0).
  */
-export function fitBaselineModel(dailyRevenue: DailyRevenue[]): BaselineModel {
+export function fitBaselineModel(dailyRevenue: DailyRevenue[], valueOf: MetricExtractor = REVENUE_METRIC): BaselineModel {
   const sorted = [...dailyRevenue].sort((a, b) => a.date.localeCompare(b.date))
-  const filled = fillGaps(sorted)
+  const filled = fillGaps(sorted, valueOf)
 
   if (filled.length === 0) {
     return {
@@ -89,7 +96,7 @@ export function fitBaselineModel(dailyRevenue: DailyRevenue[]): BaselineModel {
   const monthCounts = Array(12).fill(0)
   for (let i = 0; i < filled.length; i++) {
     if (trend[i] <= 0) continue
-    const ratio = filled[i].revenue / trend[i]
+    const ratio = filled[i].value / trend[i]
     const dow = dayOfWeek(filled[i].date)
     const month = monthOf(filled[i].date)
     dowSums[dow] += ratio
@@ -101,7 +108,18 @@ export function fitBaselineModel(dailyRevenue: DailyRevenue[]): BaselineModel {
   const monthIndex = normalize(monthSums.map((s, i) => (monthCounts[i] > 0 ? s / monthCounts[i] : 1)))
 
   const regressionSlice = trend.slice(-Math.min(REGRESSION_WINDOW_DAYS, trend.length))
-  const { slope, intercept } = linearRegression(regressionSlice)
+  let { slope, intercept } = linearRegression(regressionSlice)
+
+  // Cold-start / thin-data guard: a young or low-volume store's entire order
+  // history can be a handful of days. A slope fit on that few points is
+  // unstable, and extrapolating it even a couple of months forward — which
+  // this forecast horizon does — can run negative and get clamped to a flat
+  // 0 by projectedTrendAt's Math.max(0, ...). Below the minimum, don't trust
+  // a fitted slope at all: flatline at the lifetime daily average instead.
+  if (filled.length < MIN_DAYS_FOR_REGRESSION) {
+    slope = 0
+    intercept = filled.reduce((s, f) => s + f.value, 0) / filled.length
+  }
 
   return {
     dowIndex,

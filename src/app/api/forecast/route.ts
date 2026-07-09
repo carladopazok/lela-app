@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { readDailyRevenue, readCustomerOrders } from '@/lib/forecast-storage'
 import { readDummyDailyRevenue } from '@/lib/dummy-data'
-import { fitBaselineModel, baselineForecast } from '@/lib/forecast/baseline-model'
+import { fitBaselineModel, baselineForecast, ORDER_COUNT_METRIC } from '@/lib/forecast/baseline-model'
 import { fitCohortModel, cohortForecastDaily } from '@/lib/forecast/cohort-model'
 import { dateRange, shiftYear } from '@/lib/forecast/date-utils'
 import type { DailyRevenue, ForecastPoint } from '@/types'
@@ -38,19 +38,26 @@ export async function GET(req: NextRequest) {
 
   const dailyRevenue = includeDummy ? mergeDailyRevenue(readDailyRevenue(), readDummyDailyRevenue()) : readDailyRevenue()
   const actualByDate = new Map(dailyRevenue.map((r) => [r.date, r.gross_revenue]))
+  const actualOrderCountByDate = new Map(dailyRevenue.map((r) => [r.date, r.order_count]))
 
-  const baselineModel = fitBaselineModel(dailyRevenue)
+  const revenueBaseline = fitBaselineModel(dailyRevenue)
+  const orderBaseline = fitBaselineModel(dailyRevenue, ORDER_COUNT_METRIC)
   const cohortModel = model === 'cohort' ? fitCohortModel(readCustomerOrders(), dailyRevenue) : null
 
   const points: ForecastPoint[] = dateRange(start, end).map((date) => {
     const forecast =
-      cohortModel !== null ? cohortForecastDaily(cohortModel, baselineModel, date) : baselineForecast(baselineModel, date)
+      cohortModel !== null
+        ? cohortForecastDaily(cohortModel, revenueBaseline, date)
+        : { revenue: baselineForecast(revenueBaseline, date), orderCount: baselineForecast(orderBaseline, date) }
 
     return {
       date,
       actual: actualByDate.get(date) ?? null,
-      forecast: Math.round(forecast * 100) / 100,
+      forecast: Math.round(forecast.revenue * 100) / 100,
       priorYear: actualByDate.get(shiftYear(date, -1)) ?? null,
+      forecastOrderCount: Math.round(forecast.orderCount * 100) / 100,
+      actualOrderCount: actualOrderCountByDate.get(date) ?? null,
+      priorYearOrderCount: actualOrderCountByDate.get(shiftYear(date, -1)) ?? null,
     }
   })
 
