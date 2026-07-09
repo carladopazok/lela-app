@@ -7,6 +7,7 @@ import SalesOverview from '@/components/sections/SalesOverview'
 import EmailPerformance from '@/components/sections/EmailPerformance'
 import CustomerIntelligence from '@/components/sections/CustomerIntelligence'
 import CustomerService from '@/components/sections/CustomerService'
+import Forecast from '@/components/sections/Forecast'
 import AboutTool from '@/components/sections/AboutTool'
 
 export default function Home() {
@@ -47,6 +48,7 @@ export default function Home() {
               onNavigateToCustomer={goToCustomer}
             />
           )}
+          {active === 'forecast'              && <Forecast />}
           {active === 'about'                 && <AboutTool />}
         </div>
       </main>

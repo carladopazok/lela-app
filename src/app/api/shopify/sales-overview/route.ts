@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { createShopifyClient } from '@/lib/shopify'
+import { REVENUE_STATUSES } from '@/lib/shopify-constants'
 import type { ShopifyOrder, SalesMetrics } from '@/types'
 
 export async function GET(req: NextRequest) {
@@ -48,9 +49,6 @@ export async function GET(req: NextRequest) {
       return acc
     }, {})
     console.log(`[sales-overview] fetched ${orders.length} orders | statuses:`, statusBreakdown)
-
-    // Count all statuses that represent actual money received
-    const REVENUE_STATUSES = new Set(['paid', 'partially_paid', 'partially_refunded', 'authorized'])
 
     let totalRevenue = 0
     let totalRefunds = 0

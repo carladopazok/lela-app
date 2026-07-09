@@ -1,8 +1,8 @@
 'use client'
 
-import { TrendingUp, PackageX, Mail, Users, Info, HeadphonesIcon } from 'lucide-react'
+import { TrendingUp, PackageX, Mail, Users, Info, HeadphonesIcon, LineChart } from 'lucide-react'
 
-export type SectionId = 'sales-overview' | 'late-shipments' | 'email-performance' | 'customer-intelligence' | 'customer-service' | 'about'
+export type SectionId = 'sales-overview' | 'late-shipments' | 'email-performance' | 'customer-intelligence' | 'customer-service' | 'forecast' | 'about'
 
 const NAV_ITEMS: { id: SectionId; label: string; Icon: React.ElementType }[] = [
   { id: 'sales-overview',        label: 'Sales Overview',       Icon: TrendingUp },
@@ -10,6 +10,7 @@ const NAV_ITEMS: { id: SectionId; label: string; Icon: React.ElementType }[] = [
   { id: 'email-performance',     label: 'Email Performance',    Icon: Mail },
   { id: 'customer-intelligence', label: 'Customer Intelligence',Icon: Users },
   { id: 'customer-service',      label: 'Customer Service',     Icon: HeadphonesIcon },
+  { id: 'forecast',              label: 'Revenue Forecast',     Icon: LineChart },
   { id: 'about',                 label: 'About This Tool',      Icon: Info },
 ]
 

@@ -195,6 +195,50 @@ export interface CSMacro {
   updatedAt?: string
 }
 
+// ─── Forecasting ────────────────────────────────────────────────────────────
+
+export interface DailyRevenue {
+  date: string // YYYY-MM-DD
+  gross_revenue: number
+  net_revenue: number
+  order_count: number
+  new_customer_revenue: number
+  returning_customer_revenue: number
+  discount_amount: number
+  new_customer_count: number
+  returning_customer_count: number
+}
+
+export interface CampaignFlowRevenue {
+  send_date: string // YYYY-MM-DD
+  campaign_or_flow_id: string
+  type: 'campaign' | 'flow'
+  name: string
+  attributed_revenue: number | null
+  sent_count: number
+  click_count: number
+}
+
+export interface ForecastMeta {
+  lastBackfillAt: string | null
+  lastRefreshAt: string | null
+  omnisendAttributionAvailable: boolean
+}
+
+export interface CustomerOrderRow {
+  customerKey: string
+  orderDate: string // YYYY-MM-DD
+  acquisitionDate: string // YYYY-MM-DD — this customer's first-ever order date
+  revenue: number
+}
+
+export interface ForecastPoint {
+  date: string
+  actual: number | null
+  forecast: number
+  priorYear: number | null
+}
+
 export interface CampaignRow {
   id: string
   name: string
