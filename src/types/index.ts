@@ -242,6 +242,53 @@ export interface ForecastPoint {
   priorYearOrderCount: number | null
 }
 
+// ─── Products & Inventory ───────────────────────────────────────────────────
+
+export interface ProductSummary {
+  title: string
+  category: string | null
+  imageUrl: string | null
+  vendor: string
+  unitsSold: number       // trailing 365 days
+  unitsSoldWeek: number   // trailing 7 days
+  unitsSoldMonth: number  // trailing 30 days
+  revenue: number         // trailing 365 days
+  ordersCount: number
+  productId: number | null        // Shopify product id — only set when source === 'catalog'
+  inventoryQuantity: number | null // sum of variant inventory_quantity — null when catalog unavailable
+  status: string | null           // 'active' | 'draft' | 'archived' | null
+  publishedAt: string | null      // null = not live on the Online Store channel
+  price: number | null            // first variant price
+  lastSoldAt: string | null       // most recent order date seen for this title, null if never sold
+  cogs: number | null             // manually entered cost, from data/product-cogs.json
+}
+
+export interface ShopifyProductVariant {
+  id: number
+  price: string
+  inventory_quantity: number | null
+}
+
+export interface ShopifyProduct {
+  id: number
+  title: string
+  vendor: string
+  product_type: string
+  tags: string
+  status: string
+  image: { src: string } | null
+  variants: ShopifyProductVariant[]
+  published_at: string | null
+  created_at: string
+}
+
+export interface ProductsResponse {
+  products: ProductSummary[]
+  currency: string
+  source: 'catalog' | 'orders'
+  inventoryAvailable: boolean
+}
+
 export interface CampaignRow {
   id: string
   name: string

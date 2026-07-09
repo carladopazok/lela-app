@@ -5,6 +5,7 @@ import Sidebar, { type SectionId } from '@/components/layout/Sidebar'
 import { DummyDataProvider } from '@/lib/dummy-data-context'
 import LateShipments from '@/components/sections/LateShipments'
 import SalesOverview from '@/components/sections/SalesOverview'
+import ProductsInventory from '@/components/sections/ProductsInventory'
 import EmailPerformance from '@/components/sections/EmailPerformance'
 import CustomerIntelligence from '@/components/sections/CustomerIntelligence'
 import CustomerService from '@/components/sections/CustomerService'
@@ -35,6 +36,7 @@ export default function Home() {
           <div className="max-w-5xl mx-auto px-10 py-12">
             {active === 'sales-overview'        && <SalesOverview />}
             {active === 'late-shipments'        && <LateShipments />}
+            {active === 'products-inventory'    && <ProductsInventory />}
             {active === 'email-performance'     && <EmailPerformance />}
             {active === 'customer-intelligence' && (
               <CustomerIntelligence
