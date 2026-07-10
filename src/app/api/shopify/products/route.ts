@@ -5,7 +5,7 @@ import { REVENUE_STATUSES } from '@/lib/shopify-constants'
 import { readProductCategories } from '@/lib/product-categories-storage'
 import { readProductCogs } from '@/lib/product-cogs-storage'
 import { readDummyOrders } from '@/lib/dummy-data'
-import type { ShopifyOrder, ShopifyProduct, ProductSummary } from '@/types'
+import type { ShopifyOrder, ShopifyProduct, ShopifyInventoryItem, ProductSummary } from '@/types'
 
 interface SalesEntry {
   unitsSold: number
@@ -17,6 +17,32 @@ interface SalesEntry {
   vendor: string
   productType: string
   lastSoldAt: string | null
+}
+
+const INVENTORY_ITEM_CHUNK_SIZE = 250
+
+// Batch-fetch InventoryItem.cost ("Cost per item" in Shopify admin) for a set of inventory item
+// ids. Requires the read_inventory scope — not granted on every session, so this is optional:
+// callers get an empty map (no native cost data) rather than a thrown error if it fails.
+async function fetchInventoryItemCosts(
+  shopify: ReturnType<typeof createShopifyClient>,
+  inventoryItemIds: number[],
+): Promise<Map<number, number>> {
+  const costMap = new Map<number, number>()
+  if (inventoryItemIds.length === 0) return costMap
+
+  for (let i = 0; i < inventoryItemIds.length; i += INVENTORY_ITEM_CHUNK_SIZE) {
+    const chunk = inventoryItemIds.slice(i, i + INVENTORY_ITEM_CHUNK_SIZE)
+    const data = await shopify.get<{ inventory_items: ShopifyInventoryItem[] }>('/inventory_items.json', {
+      ids: chunk.join(','),
+      fields: 'id,cost',
+    })
+    for (const item of data.inventory_items ?? []) {
+      if (item.cost != null) costMap.set(item.id, parseFloat(item.cost))
+    }
+  }
+
+  return costMap
 }
 
 // Sales stats always come from order line_items. The product catalog itself is fetched from
@@ -35,7 +61,9 @@ export async function GET(req: NextRequest) {
     const monthAgo = new Date(Date.now() - 30 * 86_400_000)
 
     const [shopResult, orders] = await Promise.all([
-      shopify.get<{ shop: { currency: string } }>('/shop.json'),
+      shopify.get<{ shop: { currency: string; primary_locale: string | null; country_code: string | null } }>('/shop.json', {
+        fields: 'currency,primary_locale,country_code',
+      }),
       shopify.getAll<ShopifyOrder>('/orders.json', 'orders', {
         status: 'any',
         created_at_min: yearAgo,
@@ -92,6 +120,17 @@ export async function GET(req: NextRequest) {
       })
 
       source = 'catalog'
+
+      let inventoryItemCosts = new Map<number, number>()
+      try {
+        const inventoryItemIds = shopifyProducts
+          .map((p) => p.variants?.[0]?.inventory_item_id)
+          .filter((id): id is number => id != null)
+        inventoryItemCosts = await fetchInventoryItemCosts(shopify, inventoryItemIds)
+      } catch (err) {
+        console.warn('[products] could not fetch inventory item costs (likely missing read_inventory scope), native cost unavailable:', err instanceof Error ? err.message : err)
+      }
+
       products = shopifyProducts.map((p) => {
         const sales = salesMap.get(p.title)
         const tags = (p.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean)
@@ -99,7 +138,8 @@ export async function GET(req: NextRequest) {
           if (v.inventory_quantity == null) return sum
           return (sum ?? 0) + v.inventory_quantity
         }, null)
-        const firstVariantPrice = p.variants?.[0]?.price
+        const firstVariant = p.variants?.[0]
+        const manualCogsEntry = productCogsMap[String(p.id)]
         return {
           title: p.title,
           category: productCategoryMap[p.title] || (tags.length > 0 ? tags.join(', ') : p.product_type?.trim() || null),
@@ -111,12 +151,15 @@ export async function GET(req: NextRequest) {
           revenue: sales?.revenue ?? 0,
           ordersCount: sales?.orderIds.size ?? 0,
           productId: p.id,
+          sku: firstVariant?.sku ?? null,
           inventoryQuantity,
           status: p.status ?? null,
           publishedAt: p.published_at ?? null,
-          price: firstVariantPrice != null ? parseFloat(firstVariantPrice) : null,
+          createdAt: p.created_at ?? null,
+          price: firstVariant?.price != null ? parseFloat(firstVariant.price) : null,
           lastSoldAt: sales?.lastSoldAt ?? null,
-          cogs: productCogsMap[p.title] ?? null,
+          cogs: manualCogsEntry?.manualCogs ?? null,
+          nativeCogs: firstVariant?.inventory_item_id != null ? inventoryItemCosts.get(firstVariant.inventory_item_id) ?? null : null,
         }
       })
     } catch (err) {
@@ -133,16 +176,22 @@ export async function GET(req: NextRequest) {
         revenue: sales.revenue,
         ordersCount: sales.orderIds.size,
         productId: null,
+        sku: null,
         inventoryQuantity: null,
         status: null,
         publishedAt: null,
+        createdAt: null,
         price: null,
         lastSoldAt: sales.lastSoldAt,
-        cogs: productCogsMap[title] ?? null,
+        cogs: null,
+        nativeCogs: null,
       }))
     }
 
-    return NextResponse.json({ products, currency: shopResult.shop.currency, source, inventoryAvailable: source === 'catalog' })
+    const { primary_locale, country_code } = shopResult.shop
+    const locale = primary_locale && country_code ? `${primary_locale}-${country_code}` : 'en-US'
+
+    return NextResponse.json({ products, currency: shopResult.shop.currency, locale, source, inventoryAvailable: source === 'catalog' })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })

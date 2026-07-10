@@ -255,18 +255,23 @@ export interface ProductSummary {
   revenue: number         // trailing 365 days
   ordersCount: number
   productId: number | null        // Shopify product id — only set when source === 'catalog'
+  sku: string | null              // first variant's SKU
   inventoryQuantity: number | null // sum of variant inventory_quantity — null when catalog unavailable
   status: string | null           // 'active' | 'draft' | 'archived' | null
   publishedAt: string | null      // null = not live on the Online Store channel
+  createdAt: string | null        // Shopify product created_at — fallback reference for stalled calc when never sold
   price: number | null            // first variant price
   lastSoldAt: string | null       // most recent order date seen for this title, null if never sold
-  cogs: number | null             // manually entered cost, from data/product-cogs.json
+  cogs: number | null             // manually entered cost, from data/product-cogs.json, keyed by product id
+  nativeCogs: number | null       // Shopify's "Cost per item" (InventoryItem.cost), first variant
 }
 
 export interface ShopifyProductVariant {
   id: number
   price: string
   inventory_quantity: number | null
+  sku: string
+  inventory_item_id: number
 }
 
 export interface ShopifyProduct {
@@ -282,11 +287,48 @@ export interface ShopifyProduct {
   created_at: string
 }
 
+export interface ShopifyInventoryItem {
+  id: number
+  cost: string | null
+}
+
 export interface ProductsResponse {
   products: ProductSummary[]
   currency: string
+  locale: string
   source: 'catalog' | 'orders'
   inventoryAvailable: boolean
+}
+
+// ─── Related Products / Cross-sell ─────────────────────────────────────────
+
+export type RelationType = 'same-tag' | 'frequently-bought-together'
+
+export interface RelatedProductEntry {
+  relatedProductId: string
+  relationType: RelationType
+  coPurchaseCount: number | null // null for same-tag relations
+}
+
+export interface RelatedProductsData {
+  computedAt: string | null
+  minSharedOrders: number
+  relations: Record<string, RelatedProductEntry[]> // keyed by product id (string)
+}
+
+export interface InterestedCustomer {
+  id: number
+  email: string
+  firstName: string
+  lastName: string
+  consented: boolean
+}
+
+export interface InterestedCustomersResponse {
+  total: number
+  consented: number
+  totalCustomers: number // size of the whole customer base, for "X% of customers" context
+  customers: InterestedCustomer[]
 }
 
 export interface CampaignRow {

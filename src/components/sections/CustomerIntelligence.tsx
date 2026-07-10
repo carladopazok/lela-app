@@ -15,8 +15,13 @@ import Segments from '@/components/sections/Segments'
 import { computeRFM, SEGMENT_META } from '@/lib/rfm'
 import type { RFMSegment } from '@/lib/rfm'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
-import type { EnrichedCustomer, ShopifyOrder, CSTicket } from '@/types'
+import type { EnrichedCustomer, ShopifyOrder, CSTicket, RelatedProductsData } from '@/types'
 import { CUSTOMER_TAGS } from '@/types'
+
+interface RelatedProductLookup {
+  title: string
+  imageUrl: string | null
+}
 
 function formatDate(iso: string | null) {
   if (!iso) return 'Never'
@@ -54,19 +59,25 @@ function CustomerExpandedDetail({
   customTagTypes,
   productCategories,
   tickets,
+  relatedProductsData,
+  productLookup,
   onTagToggled,
   onTagCreated,
   onCategoryAssigned,
   onNavigateToTicket,
+  onNavigateToProduct,
 }: {
   customer: EnrichedCustomer
   customTagTypes: string[]
   productCategories: Record<string, string>
   tickets: CSTicket[]
+  relatedProductsData: RelatedProductsData | null
+  productLookup: Map<string, RelatedProductLookup>
   onTagToggled: (customer: EnrichedCustomer, tag: string) => Promise<void>
   onTagCreated: (tag: string) => void
   onCategoryAssigned: (title: string, category: string | null) => void
   onNavigateToTicket?: (ticketId: string) => void
+  onNavigateToProduct?: (productId: number) => void
 }) {
   const [orders, setOrders] = useState<ShopifyOrder[]>([])
   const [shop, setShop] = useState<string | null>(null)
@@ -77,6 +88,8 @@ function CustomerExpandedDetail({
   const [savingTag, setSavingTag] = useState(false)
   const [localCustomer, setLocalCustomer] = useState(customer)
   const [showOrders, setShowOrders] = useState(false)
+  const [addingToSegment, setAddingToSegment] = useState<string | null>(null)
+  const [segmentAddedFor, setSegmentAddedFor] = useState<Set<string>>(new Set())
   const [editingCategoryFor, setEditingCategoryFor] = useState<string | null>(null)
   const [categoryInput, setCategoryInput] = useState('')
   const { includeDummy } = useDummyData()
@@ -120,7 +133,7 @@ function CustomerExpandedDetail({
   const allTagTypes = [...CUSTOMER_TAGS, ...customTagTypes]
 
   const products = useMemo(() => {
-    const map = new Map<string, { qty: number; image_url: string | null; category: string }>()
+    const map = new Map<string, { qty: number; image_url: string | null; category: string; productId: number | null }>()
     for (const order of orders) {
       for (const item of order.line_items ?? []) {
         const existing = map.get(item.title)
@@ -134,6 +147,7 @@ function CustomerExpandedDetail({
             qty: item.quantity,
             image_url: item.image_url ?? null,
             category,
+            productId: item.product_id ?? null,
           })
         }
       }
@@ -147,6 +161,48 @@ function CustomerExpandedDetail({
     () => [...new Set(products.map((p) => p.category).filter(Boolean))],
     [products],
   )
+
+  const purchasedProductIds = useMemo(() => {
+    const set = new Set<string>()
+    for (const order of orders) {
+      for (const item of order.line_items ?? []) {
+        if (item.product_id != null) set.add(String(item.product_id))
+      }
+    }
+    return set
+  }, [orders])
+
+  // Reuses the same relation cache computed for Products & Inventory's Product Detail
+  // screen (data/related-products.json) — no second computation.
+  const suggestedProducts = useMemo(() => {
+    if (!relatedProductsData) return []
+    const suggestedIds = new Set<string>()
+    for (const productId of purchasedProductIds) {
+      for (const entry of relatedProductsData.relations[productId] ?? []) {
+        if (!purchasedProductIds.has(entry.relatedProductId)) suggestedIds.add(entry.relatedProductId)
+      }
+    }
+    return [...suggestedIds]
+      .map((id) => ({ id, ...productLookup.get(id) }))
+      .filter((p): p is { id: string; title: string; imageUrl: string | null } => p.title != null)
+  }, [relatedProductsData, purchasedProductIds, productLookup])
+
+  const consented = customer.email_marketing_consent?.state === 'subscribed'
+
+  async function addToProductSegment(productId: string, productTitle: string) {
+    if (!customer.email || !consented) return
+    setAddingToSegment(productId)
+    try {
+      const res = await fetch(`/api/shopify/products/${productId}/create-segment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerEmails: [customer.email], productTitle }),
+      })
+      if (res.ok) setSegmentAddedFor((prev) => new Set(prev).add(productId))
+    } finally {
+      setAddingToSegment(null)
+    }
+  }
 
   return (
     <div className="p-5 bg-sand-50">
@@ -281,7 +337,17 @@ function CustomerExpandedDetail({
                           <Package size={12} className="text-charcoal-300" />
                         </div>
                       )}
-                      <span className="text-xs text-charcoal-600 flex-1 truncate">{p.title}</span>
+                      {p.productId != null && onNavigateToProduct ? (
+                        <button
+                          onClick={() => onNavigateToProduct(p.productId as number)}
+                          title="View product details"
+                          className="text-xs text-charcoal-600 flex-1 truncate text-left hover:text-terracotta-600 hover:underline transition-colors"
+                        >
+                          {p.title}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-charcoal-600 flex-1 truncate">{p.title}</span>
+                      )}
                       <span className="shrink-0 text-xs text-charcoal-400">×{p.qty}</span>
                     </div>
                     <div className="ml-10 mt-1">
@@ -419,6 +485,52 @@ function CustomerExpandedDetail({
         </div>
       </div>
 
+      {/* Might Be Interested In — cross-sell suggestions from related-products data */}
+      {suggestedProducts.length > 0 && (
+        <div className="bg-white rounded-xl p-4 shadow-sm mb-4">
+          <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3 flex items-center gap-1.5">
+            <Package size={11} /> Might Be Interested In
+          </p>
+          <ul className="space-y-2">
+            {suggestedProducts.map((p) => (
+              <li key={p.id} className="flex items-center gap-2">
+                {p.imageUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={p.imageUrl} alt={p.title} className="w-7 h-7 rounded object-cover shrink-0 border border-sand-200" />
+                ) : (
+                  <div className="w-7 h-7 rounded bg-sand-100 border border-sand-200 shrink-0 flex items-center justify-center">
+                    <Package size={11} className="text-charcoal-300" />
+                  </div>
+                )}
+                {onNavigateToProduct ? (
+                  <button
+                    onClick={() => onNavigateToProduct(Number(p.id))}
+                    title="View product details"
+                    className="flex-1 min-w-0 text-xs text-charcoal-600 truncate text-left hover:text-terracotta-600 hover:underline transition-colors"
+                  >
+                    {p.title}
+                  </button>
+                ) : (
+                  <span className="flex-1 min-w-0 text-xs text-charcoal-600 truncate">{p.title}</span>
+                )}
+                {segmentAddedFor.has(p.id) ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-olive-100 text-olive-600 shrink-0">Added</span>
+                ) : (
+                  <button
+                    onClick={() => addToProductSegment(p.id, p.title)}
+                    disabled={!consented || addingToSegment === p.id}
+                    title={consented ? 'Add this customer to this product’s Omnisend segment' : 'No marketing consent — cannot add to a segment'}
+                    className="text-[10px] px-2 py-0.5 rounded-full border border-sand-300 text-charcoal-500 hover:border-terracotta-300 hover:text-terracotta-600 transition-colors disabled:opacity-40 shrink-0"
+                  >
+                    {addingToSegment === p.id ? 'Adding…' : 'Add to Segment'}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Order history (collapsible) */}
       <div className="bg-white rounded-xl shadow-sm overflow-hidden">
         <button
@@ -497,10 +609,12 @@ export default function CustomerIntelligence({
   openCustomerEmail,
   onOpenCustomerHandled,
   onNavigateToTicket,
+  onNavigateToProduct,
 }: {
   openCustomerEmail?: string | null
   onOpenCustomerHandled?: () => void
   onNavigateToTicket?: (ticketId: string) => void
+  onNavigateToProduct?: (productId: number) => void
 } = {}) {
   const [customers, setCustomers] = useState<EnrichedCustomer[]>([])
   const [customTagTypes, setCustomTagTypes] = useState<string[]>([])
@@ -520,27 +634,39 @@ export default function CustomerIntelligence({
   const [sortKey, setSortKey] = useState<'name' | 'orders' | 'aov' | 'lastOrder' | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [hiddenEmailIds, setHiddenEmailIds] = useState<Set<number>>(new Set())
+  const [relatedProductsData, setRelatedProductsData] = useState<RelatedProductsData | null>(null)
+  const [productLookup, setProductLookup] = useState<Map<string, RelatedProductLookup>>(new Map())
   const { includeDummy } = useDummyData()
 
   async function load() {
     setLoading(true)
     setError(null)
     try {
-      const [custRes, typesRes, catRes, ticketRes] = await Promise.all([
+      const [custRes, typesRes, catRes, ticketRes, relatedRes, productsRes] = await Promise.all([
         fetch(withDummyParam('/api/shopify/customers', includeDummy)),
         fetch('/api/shopify/customer-tag-types'),
         fetch('/api/shopify/product-categories'),
         fetch(withDummyParam('/api/cs/tickets', includeDummy)),
+        fetch('/api/shopify/related-products'),
+        fetch(withDummyParam('/api/shopify/products', includeDummy)),
       ])
       const custData = await custRes.json()
       const typesData = await typesRes.json()
       const catData = await catRes.json()
       const ticketData = await ticketRes.json()
+      const relatedData = await relatedRes.json()
+      const productsData = await productsRes.json()
       if (!custRes.ok) throw new Error(custData.error)
       setCustomers(custData.customers)
       setCustomTagTypes(typesData.types ?? [])
       setProductCategories(catData.categories ?? {})
       setTickets(ticketData.tickets ?? [])
+      setRelatedProductsData(relatedRes.ok ? relatedData : null)
+      const lookup = new Map<string, RelatedProductLookup>()
+      for (const p of productsData.products ?? []) {
+        if (p.productId != null) lookup.set(String(p.productId), { title: p.title, imageUrl: p.imageUrl })
+      }
+      setProductLookup(lookup)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -1050,10 +1176,13 @@ export default function CustomerIntelligence({
                                 customTagTypes={customTagTypes}
                                 productCategories={productCategories}
                                 tickets={customerTickets}
+                                relatedProductsData={relatedProductsData}
+                                productLookup={productLookup}
                                 onTagToggled={toggleManualTag}
                                 onTagCreated={(tag) => setCustomTagTypes((prev) => prev.includes(tag) ? prev : [...prev, tag])}
                                 onCategoryAssigned={handleCategoryAssigned}
                                 onNavigateToTicket={onNavigateToTicket}
+                                onNavigateToProduct={onNavigateToProduct}
                               />
                             </td>
                           </tr>

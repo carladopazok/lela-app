@@ -5,24 +5,24 @@ export async function GET() {
   return NextResponse.json({ cogs: readProductCogs() })
 }
 
-// Set a product's manual cost: { title, cost }
+// Set a product's manual cost: { productId, sku, cost }
 export async function POST(req: NextRequest) {
-  const { title, cost } = await req.json()
+  const { productId, sku, cost } = await req.json()
   const parsedCost = typeof cost === 'number' ? cost : parseFloat(cost)
-  if (!title || !Number.isFinite(parsedCost) || parsedCost < 0) {
-    return NextResponse.json({ error: 'title and a non-negative cost are required' }, { status: 400 })
+  if (!productId || !Number.isFinite(parsedCost) || parsedCost < 0) {
+    return NextResponse.json({ error: 'productId and a non-negative cost are required' }, { status: 400 })
   }
   const data = readProductCogs()
-  data[title] = parsedCost
+  data[String(productId)] = { sku: sku ?? '', manualCogs: parsedCost }
   writeProductCogs(data)
   return NextResponse.json({ cogs: data })
 }
 
-// Remove a product's manual cost: { title }
+// Remove a product's manual cost: { productId }
 export async function DELETE(req: NextRequest) {
-  const { title } = await req.json()
+  const { productId } = await req.json()
   const data = readProductCogs()
-  delete data[title]
+  delete data[String(productId)]
   writeProductCogs(data)
   return NextResponse.json({ cogs: data })
 }
