@@ -316,19 +316,15 @@ export interface RelatedProductsData {
   relations: Record<string, RelatedProductEntry[]> // keyed by product id (string)
 }
 
-export interface InterestedCustomer {
-  id: number
-  email: string
-  firstName: string
-  lastName: string
-  consented: boolean
+export interface RelatedProductAudience {
+  relatedProductId: string
+  customerIds: number[] // consented customers who bought this related product, haven't bought the target product
 }
 
 export interface InterestedCustomersResponse {
-  total: number
-  consented: number
-  totalCustomers: number // size of the whole customer base, for "X% of customers" context
-  customers: InterestedCustomer[]
+  totalCustomers: number // size of the whole customer base
+  byRelatedProduct: RelatedProductAudience[]
+  customerEmails: Record<number, string> // customer id -> email, only for ids appearing above
 }
 
 export interface CampaignRow {

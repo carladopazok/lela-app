@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { createShopifyClient } from '@/lib/shopify'
 import { readRelatedProducts } from '@/lib/related-products-storage'
-import type { ShopifyCustomer, ShopifyOrder, InterestedCustomer, InterestedCustomersResponse } from '@/types'
+import type { ShopifyCustomer, ShopifyOrder, RelatedProductAudience, InterestedCustomersResponse } from '@/types'
 
 interface RouteParams {
   params: { id: string }
 }
 
-// Customers who bought at least one related product but have never bought this one.
+// Per-related-product breakdown of consented customers who bought that specific related
+// product but have never bought the target product — broken down per related product
+// (rather than one flattened union) so the client can toggle which related products count
+// toward the audience and re-union/dedupe instantly, with no extra network round trip.
 export async function GET(req: NextRequest, { params }: RouteParams) {
   const session = getSession()
   if (!session) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
@@ -16,23 +19,22 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
     const productId = params.id
     const { relations } = readRelatedProducts()
-    const relatedIds = new Set((relations[productId] ?? []).map((r) => r.relatedProductId))
+    const relatedIds = (relations[productId] ?? []).map((r) => r.relatedProductId)
 
     const shopify = createShopifyClient(session)
 
-    if (relatedIds.size === 0) {
+    if (relatedIds.length === 0) {
       const totalCustomers = await shopify.get<{ count: number }>('/customers/count.json')
       return NextResponse.json({
-        total: 0,
-        consented: 0,
         totalCustomers: totalCustomers.count,
-        customers: [],
+        byRelatedProduct: [],
+        customerEmails: {},
       } satisfies InterestedCustomersResponse)
     }
 
     const [customers, orders] = await Promise.all([
       shopify.getAll<ShopifyCustomer>('/customers.json', 'customers', {
-        fields: 'id,first_name,last_name,email,email_marketing_consent',
+        fields: 'id,email,email_marketing_consent',
       }),
       shopify.getAll<ShopifyOrder>('/orders.json', 'orders', {
         status: 'any',
@@ -40,6 +42,11 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         fields: 'id,customer,line_items',
       }),
     ])
+
+    const consentedById = new Map<number, string>()
+    for (const c of customers) {
+      if (c.email_marketing_consent?.state === 'subscribed') consentedById.set(c.id, c.email)
+    }
 
     const purchasedByCustomer = new Map<number, Set<string>>()
     for (const order of orders) {
@@ -51,27 +58,23 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       purchasedByCustomer.set(order.customer.id, set)
     }
 
-    const interested: InterestedCustomer[] = []
-    for (const customer of customers) {
-      const purchased = purchasedByCustomer.get(customer.id)
-      if (!purchased || purchased.has(productId)) continue
-      const boughtRelated = [...relatedIds].some((id) => purchased.has(id))
-      if (!boughtRelated) continue
-
-      interested.push({
-        id: customer.id,
-        email: customer.email,
-        firstName: customer.first_name,
-        lastName: customer.last_name,
-        consented: customer.email_marketing_consent?.state === 'subscribed',
-      })
-    }
+    const customerEmails: Record<number, string> = {}
+    const byRelatedProduct: RelatedProductAudience[] = relatedIds.map((relatedProductId) => {
+      const customerIds: number[] = []
+      for (const [customerId, email] of consentedById) {
+        const purchased = purchasedByCustomer.get(customerId)
+        if (!purchased || purchased.has(productId)) continue
+        if (!purchased.has(relatedProductId)) continue
+        customerIds.push(customerId)
+        customerEmails[customerId] = email
+      }
+      return { relatedProductId, customerIds }
+    })
 
     const response: InterestedCustomersResponse = {
-      total: interested.length,
-      consented: interested.filter((c) => c.consented).length,
       totalCustomers: customers.length,
-      customers: interested,
+      byRelatedProduct,
+      customerEmails,
     }
 
     return NextResponse.json(response)

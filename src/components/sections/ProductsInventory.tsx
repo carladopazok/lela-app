@@ -2,23 +2,25 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
-  RefreshCw, AlertCircle, Package, Check, X, TrendingUp, Info,
-  ArrowLeft, Boxes, XCircle, Clock, Mail, Loader2, ArrowUp, ArrowDown, ArrowUpDown, Pencil,
+  RefreshCw, AlertCircle, Package, Check, X, Info, Boxes, XCircle, Clock, Mail, Loader2,
+  Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, Users,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
-import CollapsibleCard from '@/components/ui/CollapsibleCard'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
-import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse } from '@/types'
+import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry } from '@/types'
 
-type View = 'overview' | 'products' | 'collections' | 'bestsellers' | 'product-detail'
-type BestSellerPeriod = 'week' | 'month'
-type OverviewScreen = 'summary' | 'inventory' | 'sold-out' | 'stalled'
-type StalledThreshold = 90 | 180 | 365
-type ProductSortKey = 'title' | 'category' | 'price' | 'margin'
+type ActiveFilter = 'all' | 'soldout' | 'stalled'
+type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status'
+type SortDir = 'asc' | 'desc'
+type StatusBadge = 'bestseller' | 'soldout' | 'stalled' | null
 
+const STATUS_RANK: Record<'bestseller' | 'soldout' | 'stalled' | 'none', number> = {
+  bestseller: 0, soldout: 1, stalled: 2, none: 3,
+}
+
+const STALLED_DAYS = 90
 const LOW_STOCK_THRESHOLD = 3
 const DISCOUNT_OPTIONS = [0, 0.2, 0.4, 0.6] as const
-const CONVERSION_OPTIONS = [0.05, 0.1, 0.2] as const
 
 function fmt(n: number, currency: string, locale: string) {
   try {
@@ -43,17 +45,26 @@ function formatDate(iso: string | null): string {
 // been available long enough to judge. Falls back from last-sold date to when it went live
 // (published_at), then to when it was created, rather than treating "never sold" as an instant,
 // threshold-proof flag.
+function daysStalledFor(p: ProductSummary): number {
+  const reference = p.lastSoldAt ?? p.publishedAt ?? p.createdAt
+  return reference ? daysSince(reference) : 0
+}
+
 function isStalled(p: ProductSummary, thresholdDays: number): boolean {
   const reference = p.lastSoldAt ?? p.publishedAt ?? p.createdAt
   if (reference == null) return false
   return daysSince(reference) >= thresholdDays
 }
 
-// Per-unit margin at current price vs. a given cost — null when either is missing.
-function marginFor(p: ProductSummary, cost: number | null): { amount: number; percent: number } | null {
-  if (p.price == null || cost == null || p.price === 0) return null
-  const amount = p.price - cost
-  return { amount, percent: (amount / p.price) * 100 }
+function isSoldOutLive(p: ProductSummary): boolean {
+  return p.inventoryQuantity === 0 && p.status === 'active' && p.publishedAt !== null
+}
+
+// Per-unit margin at a given price vs. a given cost — null when either is missing.
+function marginAt(price: number | null, cost: number | null): { amount: number; percent: number } | null {
+  if (price == null || cost == null || price === 0) return null
+  const amount = price - cost
+  return { amount, percent: (amount / price) * 100 }
 }
 
 function MarginLabel({
@@ -72,25 +83,6 @@ function MarginLabel({
       {fmt(margin.amount, currency, locale)} ({margin.percent.toFixed(0)}%){negative && ' ⚠️'}
     </span>
   )
-}
-
-function computeRecovery(
-  list: ProductSummary[],
-  discountFor: (p: ProductSummary) => number,
-  cogsFor: (p: ProductSummary) => number | null,
-) {
-  let recoveredRevenue = 0
-  let costRecovered = 0
-  let totalUnits = 0
-  for (const p of list) {
-    const units = p.inventoryQuantity ?? 0
-    const price = p.price ?? 0
-    recoveredRevenue += units * price * (1 - discountFor(p))
-    const cost = cogsFor(p)
-    if (cost != null) costRecovered += units * cost
-    totalUnits += units
-  }
-  return { recoveredRevenue, costRecovered, netMargin: recoveredRevenue - costRecovered, totalUnits }
 }
 
 const ZEBRA_ROW_CLASSES = [
@@ -303,25 +295,28 @@ function CogsEditor({
   )
 }
 
-function OverviewCard({
+function KpiCard({
   label,
   value,
   sub,
   footnote,
-  onClick,
   icon,
+  active,
+  onClick,
 }: {
   label: string
   value: string
   sub?: string
   footnote?: string
-  onClick: () => void
   icon?: React.ReactNode
+  active: boolean
+  onClick: () => void
 }) {
   return (
     <button
       onClick={onClick}
-      className="text-left bg-white rounded-2xl shadow-card p-6 flex flex-col gap-1 hover:ring-2 hover:ring-terracotta-300 transition-all"
+      className={`text-left bg-white rounded-2xl shadow-card p-6 flex flex-col gap-1 transition-all
+        ${active ? 'border-2 border-terracotta-400' : 'border border-sand-200 hover:border-sand-300'}`}
     >
       <p className="text-xs font-medium uppercase tracking-widest text-charcoal-400 flex items-center gap-1.5">
         {icon} {label}
@@ -333,53 +328,46 @@ function OverviewCard({
   )
 }
 
-function BackButton({ onClick, label }: { onClick: () => void; label: string }) {
-  return (
-    <button onClick={onClick} className="flex items-center gap-1.5 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors mb-4">
-      <ArrowLeft size={14} /> {label}
-    </button>
-  )
-}
-
-// Wraps a product's title anywhere it's listed — opens its Product Detail screen (related
-// products, units sold, might-be-interested). Falls back to plain text when there's no
-// product id to navigate with (e.g. the order-derived catalog fallback).
-function ProductTitleButton({
-  product,
-  onOpen,
-  className,
-}: {
+interface ResolvedRow {
   product: ProductSummary
-  onOpen: (p: ProductSummary) => void
-  className?: string
-}) {
-  if (product.productId == null) {
-    return <span className={className}>{product.title}</span>
-  }
+  badge: StatusBadge
+  isStalledRow: boolean
+  isSoldOutLive: boolean
+  category: string | null
+  cost: number | null // final resolved cost (native Shopify cost wins over manual)
+  manualCost: number | null // manually entered cost only, for the CogsEditor's editable state
+  margin: { amount: number; percent: number } | null
+}
+
+const BADGE_STYLES: Record<Exclude<StatusBadge, null>, { label: string; className: string }> = {
+  bestseller: { label: 'Best Seller', className: 'bg-teal-50 text-teal-700 border-teal-200' },
+  soldout: { label: 'Sold Out, Live', className: 'bg-red-50 text-red-600 border-red-200' },
+  stalled: { label: 'Stalled', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+}
+
+function StatusBadgePill({ badge }: { badge: StatusBadge }) {
+  if (!badge) return null
+  const { label, className } = BADGE_STYLES[badge]
   return (
-    <button
-      onClick={() => onOpen(product)}
-      title="View product details"
-      className={`${className ?? ''} text-left hover:text-terracotta-600 hover:underline transition-colors`}
-    >
-      {product.title}
-    </button>
+    <span className={`text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap ${className}`}>
+      {label}
+    </span>
   )
 }
 
-function SortHeader<K extends string>({
+function SortableTh({
   label,
   sortKeyValue,
   activeKey,
   dir,
   onSort,
-  align = 'left',
+  align = 'right',
 }: {
   label: string
-  sortKeyValue: K
-  activeKey: K
-  dir: 'asc' | 'desc'
-  onSort: (key: K) => void
+  sortKeyValue: ProductSortKey
+  activeKey: ProductSortKey
+  dir: SortDir
+  onSort: (key: ProductSortKey) => void
   align?: 'left' | 'right'
 }) {
   const active = activeKey === sortKeyValue
@@ -387,7 +375,7 @@ function SortHeader<K extends string>({
     <th className={`pb-3 px-4 font-medium whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>
       <button
         onClick={() => onSort(sortKeyValue)}
-        className={`inline-flex items-center gap-1 uppercase tracking-wide hover:text-charcoal-600 transition-colors ${active ? 'text-charcoal-600' : ''}`}
+        className={`inline-flex items-center gap-1 hover:text-charcoal-600 transition-colors ${active ? 'text-charcoal-600' : ''}`}
       >
         {label}
         {active
@@ -397,6 +385,484 @@ function SortHeader<K extends string>({
           : <ArrowUpDown size={11} className="opacity-30" />}
       </button>
     </th>
+  )
+}
+
+// ─── Stalled row expanded panel — related products, might-be-interested audience,
+// discount/conversion simulator, create-campaign action. Local state per instance so
+// multiple rows can be expanded independently without stepping on each other. ─────────
+function StalledCampaignPanel({
+  product,
+  currency,
+  locale,
+  cost,
+  relatedEntries,
+  productsById,
+  interestedData,
+  interestedLoading,
+  interestedError,
+  onRecomputeRelated,
+  recomputingRelated,
+  relatedComputedAt,
+  onCreateSegment,
+}: {
+  product: ProductSummary
+  currency: string
+  locale: string
+  cost: number | null
+  relatedEntries: RelatedProductEntry[]
+  productsById: Map<string, ProductSummary>
+  interestedData: InterestedCustomersResponse | null
+  interestedLoading: boolean
+  interestedError: string | null
+  onRecomputeRelated: () => void
+  recomputingRelated: boolean
+  relatedComputedAt: string | null
+  onCreateSegment: (product: ProductSummary, emails: string[]) => Promise<{ ok: boolean; message: string }>
+}) {
+  // All related-product chips start ON — an empty exclusion set reads as "everything included."
+  const [excludedChips, setExcludedChips] = useState<Set<string>>(new Set())
+  const [discount, setDiscount] = useState(0)
+  const [customDiscountInput, setCustomDiscountInput] = useState('')
+  const [conversionPercent, setConversionPercent] = useState(100)
+  const [confirming, setConfirming] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  function money(n: number) { return fmt(n, currency, locale) }
+  function toggleChip(id: string) {
+    setExcludedChips((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const audienceByChip = new Map((interestedData?.byRelatedProduct ?? []).map((e) => [e.relatedProductId, e.customerIds]))
+
+  // Union of customer ids across every chip currently ON, deduplicated — a customer who
+  // bought two selected related products counts once, not twice.
+  const unionIds = useMemo(() => {
+    const set = new Set<number>()
+    for (const entry of interestedData?.byRelatedProduct ?? []) {
+      if (excludedChips.has(entry.relatedProductId)) continue
+      for (const id of entry.customerIds) set.add(id)
+    }
+    return set
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interestedData, excludedChips])
+
+  const K = unionIds.size
+  const consentedEmails = [...unionIds].map((id) => interestedData?.customerEmails[id]).filter((e): e is string => !!e)
+
+  const conversionRate = conversionPercent / 100
+  const unitsOnHand = product.inventoryQuantity ?? 0
+  const projectedBuyers = K * conversionRate
+  const buyers = Math.min(projectedBuyers, unitsOnHand)
+  const capped = projectedBuyers > unitsOnHand
+
+  const discountedPrice = product.price != null ? product.price * (1 - discount) : null
+  const discountedMargin = marginAt(discountedPrice, cost)
+  const costBasisAtRisk = cost != null ? cost * unitsOnHand : null
+  const potentialRevenue = discountedPrice != null ? discountedPrice * buyers : 0
+
+  // Revenue range preview: buyers is discount-invariant, so the range is just revenue at the
+  // two discount extremes (0% and 60%) using that same buyers figure — not tied to whichever
+  // discount tier happens to be selected below.
+  const revenueAt = (d: number) => (product.price != null ? product.price * (1 - d) * buyers : 0)
+  const revenueEnds = [revenueAt(0), revenueAt(0.6)]
+  const revenueLow = Math.min(...revenueEnds)
+  const revenueHigh = Math.max(...revenueEnds)
+
+  async function handleCreate() {
+    setCreating(true)
+    setResult(null)
+    const outcome = await onCreateSegment(product, consentedEmails)
+    setResult(outcome)
+    if (outcome.ok) setConfirming(false)
+    setCreating(false)
+  }
+
+  return (
+    <div className="bg-sand-50 rounded-xl p-4 mt-2">
+      {/* Related products — toggle chips */}
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+        <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400">Related Products</p>
+        <button
+          onClick={onRecomputeRelated}
+          disabled={recomputingRelated}
+          className="flex items-center gap-1.5 text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors px-2 py-1 rounded-lg hover:bg-white disabled:opacity-50"
+        >
+          <RefreshCw size={11} className={recomputingRelated ? 'animate-spin' : ''} />
+          Recompute {relatedComputedAt ? `(updated ${formatDate(relatedComputedAt)})` : ''}
+        </button>
+      </div>
+
+      {interestedLoading ? (
+        <p className="text-sm text-charcoal-400 mb-4">Loading audience…</p>
+      ) : interestedError ? (
+        <p className="text-sm text-red-600 mb-4">{interestedError}</p>
+      ) : relatedEntries.length === 0 ? (
+        <p className="text-sm text-charcoal-400 italic mb-4">No related products yet — try Recompute.</p>
+      ) : (
+        <ul className="flex flex-wrap gap-1.5 mb-5">
+          {relatedEntries.map((entry) => {
+            const rp = productsById.get(entry.relatedProductId)
+            const on = !excludedChips.has(entry.relatedProductId)
+            const count = audienceByChip.get(entry.relatedProductId)?.length ?? 0
+            return (
+              <li key={`${entry.relationType}-${entry.relatedProductId}`}>
+                <button
+                  onClick={() => toggleChip(entry.relatedProductId)}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors
+                    ${on ? 'border-terracotta-400 bg-terracotta-100/40 text-terracotta-700' : 'border-sand-300 text-charcoal-400'}`}
+                  title={entry.relationType === 'same-tag' ? 'Same Tag' : `Frequently Bought Together ×${entry.coPurchaseCount}`}
+                >
+                  {rp?.title ?? `Product #${entry.relatedProductId}`} · {count}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      {/* Eligible audience — headline stat */}
+      <div className="mb-4">
+        <p className="text-3xl font-serif font-semibold text-charcoal-700">{K.toLocaleString()}</p>
+        <p className="text-xs text-charcoal-400">
+          eligible customers — bought a selected related product, have marketing consent, haven&apos;t bought this piece
+        </p>
+      </div>
+
+      {capped && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+          Only {unitsOnHand} unit{unitsOnHand === 1 ? '' : 's'} on hand — projected buyers exceed supply, revenue is capped to
+          what you can actually fulfil.
+        </p>
+      )}
+
+      {K > 0 && (
+        <p className="text-sm text-charcoal-600 mb-5">
+          A campaign to these <span className="font-semibold text-charcoal-700">{K}</span> customers could generate{' '}
+          <span className="font-semibold text-charcoal-700">{money(revenueLow)}</span> to{' '}
+          <span className="font-semibold text-charcoal-700">{money(revenueHigh)}</span> depending on the discount you
+          choose{capped ? `, limited by ${unitsOnHand} unit${unitsOnHand === 1 ? '' : 's'} on hand` : ''}.
+        </p>
+      )}
+
+      {/* Discount tier selector */}
+      <div className="flex items-center gap-2 flex-wrap mb-4">
+        <span className="text-xs text-charcoal-400 whitespace-nowrap">Discount</span>
+        <div className="flex items-center gap-1 bg-white p-1 rounded-xl flex-wrap border border-sand-200">
+          {DISCOUNT_OPTIONS.map((d) => (
+            <button
+              key={d}
+              onClick={() => { setDiscount(d); setCustomDiscountInput('') }}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all
+                ${discount === d && customDiscountInput === ''
+                  ? 'bg-terracotta-500 text-white shadow-sm'
+                  : 'text-charcoal-500 hover:text-charcoal-700'}`}
+            >
+              {d === 0 ? 'No Discount' : `${Math.round(d * 100)}% Off`}
+            </button>
+          ))}
+          <div className={`flex items-center gap-1 pl-2 pr-1.5 py-1 rounded-lg transition-all ${customDiscountInput !== '' ? 'bg-terracotta-500 shadow-sm' : ''}`}>
+            <span className={`text-xs font-medium ${customDiscountInput !== '' ? 'text-white' : 'text-charcoal-500'}`}>Custom</span>
+            <input
+              type="number"
+              min={0}
+              max={95}
+              placeholder="%"
+              value={customDiscountInput}
+              onChange={(e) => {
+                const raw = e.target.value
+                setCustomDiscountInput(raw)
+                const v = parseFloat(raw)
+                if (Number.isFinite(v)) setDiscount(Math.max(0, Math.min(95, v)) / 100)
+              }}
+              className={`w-11 px-1 py-0.5 text-xs rounded border-0 focus:outline-none focus:ring-1 focus:ring-terracotta-300
+                ${customDiscountInput !== '' ? 'bg-terracotta-400 text-white placeholder-terracotta-100' : 'bg-white text-charcoal-700'}`}
+            />
+            <span className={`text-xs ${customDiscountInput !== '' ? 'text-white' : 'text-charcoal-400'}`}>%</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Assumed conversion — single input, no historical-data helper text (none exists to reference) */}
+      <div className="flex items-center gap-2 flex-wrap mb-5">
+        <span className="text-xs text-charcoal-400 whitespace-nowrap">Assumed conversion</span>
+        <div className="flex items-center gap-1 bg-white border border-sand-300 rounded-lg px-2 py-1">
+          <input
+            type="number"
+            min={0}
+            max={100}
+            step={0.5}
+            value={conversionPercent}
+            onChange={(e) => {
+              const v = parseFloat(e.target.value)
+              if (Number.isFinite(v)) setConversionPercent(Math.max(0, Math.min(100, v)))
+            }}
+            className="w-14 text-sm text-charcoal-700 focus:outline-none"
+          />
+          <span className="text-sm text-charcoal-400">%</span>
+        </div>
+      </div>
+
+      {/* Five stat cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-5 pb-5 border-b border-sand-200">
+        <div>
+          <p className="text-xs text-charcoal-400">Price at Discount</p>
+          <p className="text-base font-serif font-semibold text-charcoal-700">{discountedPrice != null ? money(discountedPrice) : '—'}</p>
+        </div>
+        <div>
+          <p className="text-xs text-charcoal-400">Margin at Discount</p>
+          <p className="text-base font-serif font-semibold text-charcoal-700">
+            <MarginLabel margin={discountedMargin} currency={currency} locale={locale} />
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-charcoal-400" title="Cost of the on-hand stalled inventory itself — fixed, doesn't move with the discount %.">
+            Cost Basis at Risk
+          </p>
+          <p className="text-base font-serif font-semibold text-charcoal-700">{costBasisAtRisk != null ? money(costBasisAtRisk) : '—'}</p>
+        </div>
+        <div>
+          <p className="text-xs text-charcoal-400">Projected Buyers</p>
+          <p className="text-base font-serif font-semibold text-charcoal-700">
+            {projectedBuyers.toFixed(1)}{capped && <span className="text-xs text-amber-700 font-sans font-normal"> (capped)</span>}
+          </p>
+          <p className="text-[10px] text-charcoal-300">
+            {K} eligible × {conversionPercent}% conversion
+            {capped && <span className="text-amber-700"> → only {buyers.toFixed(1)} can actually buy ({unitsOnHand} on hand)</span>}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-charcoal-400">Potential Revenue</p>
+          <p className="text-base font-serif font-semibold text-olive-600">{money(potentialRevenue)}</p>
+          <p className="text-[10px] text-charcoal-300">
+            {buyers.toFixed(1)} buyer{buyers === 1 ? '' : 's'} × {discountedPrice != null ? money(discountedPrice) : '—'} — estimate, not guaranteed
+          </p>
+        </div>
+      </div>
+
+      {/* Create segment action — builds the Omnisend audience; the actual campaign send
+          still happens manually in Omnisend, targeting this segment. */}
+      {K === 0 ? (
+        <p className="text-xs text-charcoal-400 italic">No consented customers match yet.</p>
+      ) : confirming ? (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <p className="text-sm text-charcoal-700 mb-3">
+            This will create a segment in Omnisend named <strong>Might buy: {product.title}</strong>, tagging{' '}
+            <strong>{consentedEmails.length}</strong> consented customer{consentedEmails.length === 1 ? '' : 's'} who bought a
+            selected related product — ready for you to build a campaign toward in Omnisend. Non-consented customers are never
+            included.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleCreate}
+              disabled={creating}
+              className="flex items-center gap-2 text-sm font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-4 py-2 rounded-lg transition-colors disabled:opacity-60"
+            >
+              {creating && <Loader2 size={14} className="animate-spin" />}
+              Confirm & Create
+            </button>
+            <button
+              onClick={() => setConfirming(false)}
+              disabled={creating}
+              className="text-sm text-charcoal-400 hover:text-charcoal-600 px-4 py-2"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setConfirming(true)}
+          className="flex items-center gap-2 text-sm font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-4 py-2 rounded-lg transition-colors"
+        >
+          <Users size={14} /> Create Segment for {K} customer{K === 1 ? '' : 's'}
+        </button>
+      )}
+
+      {result && (
+        <p className={`flex items-center gap-2 text-sm mt-3 ${result.ok ? 'text-olive-600' : 'text-red-600'}`}>
+          {result.message}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function ProductRow({
+  row,
+  index,
+  currency,
+  locale,
+  expanded,
+  onToggleExpand,
+  onAssignCategory,
+  onAssignCogs,
+  hidden,
+  confirmingHide,
+  hidingBusy,
+  hideError,
+  onRequestHide,
+  onConfirmHide,
+  onCancelHide,
+  onUndoHide,
+  relatedEntries,
+  productsById,
+  interestedData,
+  interestedLoading,
+  interestedError,
+  onRecomputeRelated,
+  recomputingRelated,
+  relatedComputedAt,
+  onCreateSegment,
+}: {
+  row: ResolvedRow
+  index: number
+  currency: string
+  locale: string
+  expanded: boolean
+  onToggleExpand: () => void
+  onAssignCategory: (title: string, category: string | null) => void
+  onAssignCogs: (productId: number, sku: string | null, cost: number | null) => void
+  hidden: boolean
+  confirmingHide: boolean
+  hidingBusy: boolean
+  hideError?: string
+  onRequestHide: () => void
+  onConfirmHide: () => void
+  onCancelHide: () => void
+  onUndoHide: () => void
+  relatedEntries: RelatedProductEntry[]
+  productsById: Map<string, ProductSummary>
+  interestedData: InterestedCustomersResponse | null
+  interestedLoading: boolean
+  interestedError: string | null
+  onRecomputeRelated: () => void
+  recomputingRelated: boolean
+  relatedComputedAt: string | null
+  onCreateSegment: (product: ProductSummary, emails: string[]) => Promise<{ ok: boolean; message: string }>
+}) {
+  const { product: p, badge, isSoldOutLive: soldOut } = row
+  function money(n: number) { return fmt(n, currency, locale) }
+  const lowStock = p.inventoryQuantity != null && p.inventoryQuantity > 0 && p.inventoryQuantity <= LOW_STOCK_THRESHOLD
+
+  return (
+    <>
+      <tr className={zebraClass(index)}>
+        <td className="py-3 pr-4">
+          <div className="flex items-center gap-2">
+            <ProductThumb imageUrl={p.imageUrl} title={p.title} />
+            <div className="min-w-0">
+              <p className="text-sm text-charcoal-700 truncate max-w-[220px]">{p.title}</p>
+              <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                <CategoryEditor title={p.title} assignedCategory={row.category} onAssign={onAssignCategory} />
+                <StatusBadgePill badge={badge} />
+              </div>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-[10px] text-charcoal-300 uppercase tracking-wide">Cost:</span>
+                <CogsEditor
+                  productId={p.productId}
+                  sku={p.sku}
+                  nativeValue={p.nativeCogs}
+                  manualValue={row.manualCost}
+                  currency={currency}
+                  locale={locale}
+                  onAssign={onAssignCogs}
+                />
+              </div>
+            </div>
+          </div>
+        </td>
+        <td className="py-3 px-4 text-right whitespace-nowrap">
+          <p className="text-sm text-charcoal-700">{p.inventoryQuantity != null ? p.inventoryQuantity.toLocaleString() : '—'}</p>
+          {lowStock && (
+            <div className="flex items-center justify-end gap-1 mt-0.5">
+              <span className="text-[10px] font-semibold text-red-600 whitespace-nowrap">Low in stock</span>
+              <a href={reorderMailto(p)} title="Email a reorder request" className="text-red-500 hover:text-red-600">
+                <Mail size={10} />
+              </a>
+            </div>
+          )}
+        </td>
+        <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">{p.price != null ? money(p.price) : '—'}</td>
+        <td className="py-3 pl-4 text-right whitespace-nowrap">
+          <div className="flex items-center justify-end gap-2">
+            {soldOut && (
+              hidden ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] px-2 py-1 rounded-full bg-olive-100 text-olive-600">Hidden</span>
+                  <button
+                    onClick={onUndoHide}
+                    disabled={hidingBusy}
+                    className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-sand-300 text-charcoal-600 hover:border-olive-400 hover:text-olive-600 transition-colors disabled:opacity-50"
+                  >
+                    {hidingBusy ? <Loader2 size={10} className="animate-spin" /> : null} Undo
+                  </button>
+                </div>
+              ) : confirmingHide ? (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={onConfirmHide}
+                    disabled={hidingBusy}
+                    className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg bg-red-500 text-white hover:bg-red-600 disabled:opacity-50"
+                  >
+                    {hidingBusy ? <Loader2 size={10} className="animate-spin" /> : null} Confirm?
+                  </button>
+                  <button onClick={onCancelHide} className="text-[11px] px-2 py-1 text-charcoal-400 hover:text-charcoal-600">
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={onRequestHide}
+                  disabled={p.productId == null}
+                  className="text-[11px] px-2.5 py-1 rounded-lg border border-sand-300 text-charcoal-600 hover:border-red-300 hover:text-red-600 transition-colors disabled:opacity-40"
+                >
+                  Hide from Store
+                </button>
+              )
+            )}
+            {!soldOut && (
+              <button
+                onClick={onToggleExpand}
+                className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-colors
+                  ${expanded ? 'border-terracotta-400 text-terracotta-600 bg-terracotta-100/40' : 'border-sand-300 text-charcoal-600 hover:border-terracotta-300 hover:text-terracotta-600'}`}
+              >
+                <Megaphone size={11} /> Estimate recovery
+                <ChevronDown size={11} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+              </button>
+            )}
+          </div>
+          {hideError && <p className="text-[10px] text-red-500 mt-1">{hideError}</p>}
+        </td>
+      </tr>
+      {!soldOut && expanded && (
+        <tr>
+          <td colSpan={4} className="pb-3">
+            <StalledCampaignPanel
+              product={p}
+              currency={currency}
+              locale={locale}
+              cost={row.cost}
+              relatedEntries={relatedEntries}
+              productsById={productsById}
+              interestedData={interestedData}
+              interestedLoading={interestedLoading}
+              interestedError={interestedError}
+              onRecomputeRelated={onRecomputeRelated}
+              recomputingRelated={recomputingRelated}
+              relatedComputedAt={relatedComputedAt}
+              onCreateSegment={onCreateSegment}
+            />
+          </td>
+        </tr>
+      )}
+    </>
   )
 }
 
@@ -416,36 +882,43 @@ export default function ProductsInventory({
   const [cogsOverrides, setCogsOverrides] = useState<Record<string, { sku: string; manualCogs: number }>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [view, setView] = useState<View>('overview')
-  const [overviewScreen, setOverviewScreen] = useState<OverviewScreen>('summary')
-  const [stalledThreshold, setStalledThreshold] = useState<StalledThreshold>(90)
-  const [selectedDiscount, setSelectedDiscount] = useState(0)
-  const [customDiscountInput, setCustomDiscountInput] = useState('')
-  const [rowDiscountOverrides, setRowDiscountOverrides] = useState<Record<string, number>>({})
-  const [bestSellerPeriod, setBestSellerPeriod] = useState<BestSellerPeriod>('week')
-  const [openCategory, setOpenCategory] = useState<string | null>(null)
-  const [sortKey, setSortKey] = useState<ProductSortKey>('title')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const { includeDummy } = useDummyData()
 
-  // Related products / cross-sell segmentation (Product Detail screen)
-  const [selectedProductId, setSelectedProductId] = useState<number | null>(null)
-  const [relatedData, setRelatedData] = useState<RelatedProductsData | null>(null)
-  const [interestedData, setInterestedData] = useState<InterestedCustomersResponse | null>(null)
-  const [loadingProductDetail, setLoadingProductDetail] = useState(false)
-  const [productDetailError, setProductDetailError] = useState<string | null>(null)
-  const [recomputing, setRecomputing] = useState(false)
-  const [conversionRate, setConversionRate] = useState<number>(0.1)
-  const [customConversionInput, setCustomConversionInput] = useState('')
-  const [segmentConfirming, setSegmentConfirming] = useState(false)
-  const [creatingSegment, setCreatingSegment] = useState(false)
-  const [segmentResult, setSegmentResult] = useState<{ ok: boolean; message: string } | null>(null)
+  // KPI filter + toolbar
+  const [activeFilter, setActiveFilter] = useState<ActiveFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [collectionFilter, setCollectionFilter] = useState('all')
+  const [sortKey, setSortKey] = useState<ProductSortKey>('name')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+
+  function handleSort(key: ProductSortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(searchQuery), 150)
+    return () => clearTimeout(t)
+  }, [searchQuery])
 
   // Sold-out → hide-from-store flow
   const [manuallyHiddenIds, setManuallyHiddenIds] = useState<Set<number>>(new Set())
   const [confirmHideId, setConfirmHideId] = useState<number | null>(null)
   const [hidingId, setHidingId] = useState<number | null>(null)
   const [hideErrors, setHideErrors] = useState<Record<number, string>>({})
+
+  // Related products (shared cache, fetched once) + per-product interested-customers (lazy, cached)
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
+  const [relatedData, setRelatedData] = useState<RelatedProductsData | null>(null)
+  const [recomputingRelated, setRecomputingRelated] = useState(false)
+  const [interestedCache, setInterestedCache] = useState<Record<number, InterestedCustomersResponse>>({})
+  const [interestedLoadingIds, setInterestedLoadingIds] = useState<Set<number>>(new Set())
+  const [interestedErrors, setInterestedErrors] = useState<Record<number, string>>({})
 
   async function load() {
     setLoading(true)
@@ -477,12 +950,23 @@ export default function ProductsInventory({
 
   useEffect(() => { load() }, [includeDummy])
 
-  // Cross-navigation from other sections (e.g. Customer Intelligence) — jump straight to a
-  // product's detail screen once its data has loaded.
+  useEffect(() => {
+    fetch('/api/shopify/related-products')
+      .then((r) => r.json())
+      .then(setRelatedData)
+      .catch(() => {})
+  }, [])
+
+  // Cross-navigation from other sections (e.g. Customer Intelligence) — surface the product
+  // via search and auto-expand its campaign panel (available for every product now).
   useEffect(() => {
     if (openProductId == null || products.length === 0) return
-    setSelectedProductId(openProductId)
-    setView('product-detail')
+    const p = products.find((prod) => prod.productId === openProductId)
+    if (p) {
+      setSearchQuery(p.title)
+      setExpandedRows((prev) => new Set(prev).add(openProductId))
+      if (!interestedCache[openProductId]) loadInterested(openProductId)
+    }
     onOpenProductHandled?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openProductId, products])
@@ -535,7 +1019,6 @@ export default function ProductsInventory({
     return categoryOverrides[p.title] || p.category
   }
 
-  // Manually entered cost only (client override wins over the server-merged value optimistically).
   function manualCogsFor(p: ProductSummary): number | null {
     if (p.productId != null) {
       const override = cogsOverrides[String(p.productId)]
@@ -544,117 +1027,12 @@ export default function ProductsInventory({
     return p.cogs
   }
 
-  // Final cost used everywhere calculations happen: Shopify's native "Cost per item" wins,
-  // falling back to the manually entered cost.
   function cogsFor(p: ProductSummary): number | null {
     return p.nativeCogs ?? manualCogsFor(p)
   }
 
   function money(n: number): string {
     return fmt(n, currency, locale)
-  }
-
-  // Effective discount for a product: a per-product override wins, otherwise the global slider/pill value.
-  function discountFor(p: ProductSummary): number {
-    return rowDiscountOverrides[p.title] ?? selectedDiscount
-  }
-
-  function setRowDiscount(title: string, value: number | null) {
-    setRowDiscountOverrides((prev) => {
-      const next = { ...prev }
-      if (value == null) delete next[title]
-      else next[title] = value
-      return next
-    })
-  }
-
-  function handleSort(key: ProductSortKey) {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortKey(key)
-      setSortDir('asc')
-    }
-  }
-
-  function openProductDetail(p: ProductSummary) {
-    if (p.productId == null) return
-    setSelectedProductId(p.productId)
-    setView('product-detail')
-  }
-
-  async function loadProductDetail(productId: number) {
-    setLoadingProductDetail(true)
-    setProductDetailError(null)
-    setSegmentConfirming(false)
-    setSegmentResult(null)
-    try {
-      const [relatedRes, interestedRes] = await Promise.all([
-        fetch('/api/shopify/related-products'),
-        fetch(`/api/shopify/products/${productId}/interested-customers`),
-      ])
-      const relatedJson = await relatedRes.json()
-      if (!relatedRes.ok) throw new Error(relatedJson.error)
-      const interestedJson = await interestedRes.json()
-      if (!interestedRes.ok) throw new Error(interestedJson.error)
-      setRelatedData(relatedJson)
-      setInterestedData(interestedJson)
-    } catch (e) {
-      setProductDetailError(e instanceof Error ? e.message : 'Failed to load related products')
-    } finally {
-      setLoadingProductDetail(false)
-    }
-  }
-
-  useEffect(() => {
-    if (view === 'product-detail' && selectedProductId != null) loadProductDetail(selectedProductId)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, selectedProductId])
-
-  async function recomputeRelated() {
-    setRecomputing(true)
-    setProductDetailError(null)
-    try {
-      const res = await fetch('/api/shopify/related-products', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ minSharedOrders: 3 }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      setRelatedData(data)
-      if (selectedProductId != null) await loadProductDetail(selectedProductId)
-    } catch (e) {
-      setProductDetailError(e instanceof Error ? e.message : 'Failed to recompute related products')
-    } finally {
-      setRecomputing(false)
-    }
-  }
-
-  async function handleCreateSegment(selectedProduct: ProductSummary, consentedEmails: string[]) {
-    if (consentedEmails.length === 0) return
-    setCreatingSegment(true)
-    setSegmentResult(null)
-    try {
-      const res = await fetch(`/api/shopify/products/${selectedProduct.productId}/create-segment`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerEmails: consentedEmails, productTitle: selectedProduct.title }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      setSegmentResult({
-        ok: true,
-        message: data.alreadyExisted
-          ? `Segment already existed in Omnisend — tagged ${data.tagged} customer${data.tagged === 1 ? '' : 's'}`
-          : `Segment created in Omnisend — tagged ${data.tagged} customer${data.tagged === 1 ? '' : 's'}`,
-      })
-      setSegmentConfirming(false)
-    } catch (e) {
-      setSegmentResult({ ok: false, message: e instanceof Error ? e.message : 'Failed to create segment' })
-    } finally {
-      setCreatingSegment(false)
-    }
   }
 
   async function setProductLiveStatus(p: ProductSummary, status: 'draft' | 'active') {
@@ -684,30 +1062,77 @@ export default function ProductsInventory({
     }
   }
 
-  const alphaProducts = useMemo(
-    () => [...products].sort((a, b) => a.title.localeCompare(b.title)),
-    [products],
-  )
-
-  const sortedProducts = useMemo(() => {
-    function valueFor(p: ProductSummary): string | number {
-      switch (sortKey) {
-        case 'title': return p.title.toLowerCase()
-        case 'category': return (categoryFor(p) || 'Uncategorized').toLowerCase()
-        case 'price': return p.price ?? -Infinity
-        case 'margin': return marginFor(p, cogsFor(p))?.amount ?? -Infinity
-      }
+  async function loadInterested(productId: number) {
+    setInterestedLoadingIds((prev) => new Set(prev).add(productId))
+    setInterestedErrors((prev) => { const next = { ...prev }; delete next[productId]; return next })
+    try {
+      const res = await fetch(`/api/shopify/products/${productId}/interested-customers`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setInterestedCache((prev) => ({ ...prev, [productId]: data }))
+    } catch (e) {
+      setInterestedErrors((prev) => ({ ...prev, [productId]: e instanceof Error ? e.message : 'Failed to load audience' }))
+    } finally {
+      setInterestedLoadingIds((prev) => { const next = new Set(prev); next.delete(productId); return next })
     }
-    return [...products].sort((a, b) => {
-      const av = valueFor(a)
-      const bv = valueFor(b)
-      let cmp = 0
-      if (typeof av === 'string' && typeof bv === 'string') cmp = av.localeCompare(bv)
-      else cmp = (av as number) - (bv as number)
-      return sortDir === 'asc' ? cmp : -cmp
+  }
+
+  function toggleExpand(productId: number | null) {
+    if (productId == null) return
+    setExpandedRows((prev) => {
+      const next = new Set(prev)
+      if (next.has(productId)) {
+        next.delete(productId)
+      } else {
+        next.add(productId)
+        if (!interestedCache[productId]) loadInterested(productId)
+      }
+      return next
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, sortKey, sortDir, categoryOverrides, cogsOverrides])
+  }
+
+  async function recomputeRelated() {
+    setRecomputingRelated(true)
+    try {
+      const res = await fetch('/api/shopify/related-products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minSharedOrders: 3 }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setRelatedData(data)
+      setInterestedCache({})
+      for (const id of expandedRows) loadInterested(id)
+    } catch {
+      // Non-fatal — the audience line will keep showing whatever was last computed.
+    } finally {
+      setRecomputingRelated(false)
+    }
+  }
+
+  async function handleCreateSegment(product: ProductSummary, emails: string[]): Promise<{ ok: boolean; message: string }> {
+    if (product.productId == null || emails.length === 0) {
+      return { ok: false, message: 'No consented customers to create a segment for.' }
+    }
+    try {
+      const res = await fetch(`/api/shopify/products/${product.productId}/create-segment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerEmails: emails, productTitle: product.title }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      return {
+        ok: true,
+        message: data.alreadyExisted
+          ? `Segment already existed in Omnisend — tagged ${data.tagged} customer${data.tagged === 1 ? '' : 's'}`
+          : `Segment created in Omnisend — tagged ${data.tagged} customer${data.tagged === 1 ? '' : 's'}`,
+      }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : 'Failed to create segment' }
+    }
+  }
 
   const productsById = useMemo(() => {
     const map = new Map<string, ProductSummary>()
@@ -715,88 +1140,102 @@ export default function ProductsInventory({
     return map
   }, [products])
 
-  const selectedProduct = selectedProductId != null ? productsById.get(String(selectedProductId)) ?? null : null
-
-  const relatedEntries = useMemo(
-    () => (selectedProductId != null ? relatedData?.relations[String(selectedProductId)] ?? [] : []),
-    [relatedData, selectedProductId],
-  )
-
-  const consentedEmails = useMemo(
-    () => (interestedData?.customers ?? []).filter((c) => c.consented).map((c) => c.email),
-    [interestedData],
-  )
-
-  const estimatedRevenue = (interestedData?.consented ?? 0) * conversionRate * (selectedProduct?.price ?? 0)
-  const customerSharePercent = interestedData && interestedData.totalCustomers > 0
-    ? (interestedData.total / interestedData.totalCustomers) * 100
-    : 0
-
-  const collections = useMemo(() => {
-    const map = new Map<string, ProductSummary[]>()
-    for (const p of products) {
-      const cat = categoryFor(p) || 'Uncategorized'
-      const list = map.get(cat) ?? []
-      list.push(p)
-      map.set(cat, list)
-    }
-    return Array.from(map.entries())
-      .map(([category, items]) => ({
-        category,
-        items: items.sort((a, b) => b.unitsSold - a.unitsSold),
-        unitsSold: items.reduce((s, p) => s + p.unitsSold, 0),
-        revenue: items.reduce((s, p) => s + p.revenue, 0),
-        inventoryUnits: items.reduce((s, p) => s + (p.inventoryQuantity ?? 0), 0),
-      }))
-      .sort((a, b) => b.unitsSold - a.unitsSold)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, categoryOverrides])
-
-  const bestSellers = useMemo(() => {
-    const key = bestSellerPeriod === 'week' ? 'unitsSoldWeek' : 'unitsSoldMonth'
-    return [...products]
-      .filter((p) => p[key] > 0)
-      .sort((a, b) => b[key] - a[key])
-      .slice(0, 10)
-  }, [products, bestSellerPeriod])
-
-  // ─── Overview derived data ────────────────────────────────────────────────
-
   const totalInventoryUnits = useMemo(
     () => products.reduce((s, p) => s + (p.inventoryQuantity ?? 0), 0),
     [products],
   )
 
-  const soldOutProducts = useMemo(
-    () => products.filter((p) => p.inventoryQuantity === 0 && p.status === 'active' && p.publishedAt !== null),
-    [products],
-  )
+  const soldOutProducts = useMemo(() => products.filter(isSoldOutLive), [products])
 
-  // Shares the same threshold as the day-range tabs in the Stalled detail screen — one
-  // dial, not a separate hardcoded number, so the Overview card never disagrees with the tabs.
   const stalledSummary = useMemo(() => {
-    const list = products.filter((p) => isStalled(p, stalledThreshold))
+    const list = products.filter((p) => isStalled(p, STALLED_DAYS))
     const units = list.reduce((s, p) => s + (p.inventoryQuantity ?? 0), 0)
     const value = list.reduce((s, p) => {
       const cost = cogsFor(p)
       return cost != null ? s + (p.inventoryQuantity ?? 0) * cost : s
     }, 0)
-    return { units, value }
+    const potentialRevenue = list.reduce((s, p) => s + (p.price ?? 0) * (p.inventoryQuantity ?? 0), 0)
+    return { units, value, potentialRevenue }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, stalledThreshold, cogsOverrides])
+  }, [products, cogsOverrides])
 
-  const stalledDetailList = useMemo(
-    () => products
-      .filter((p) => isStalled(p, stalledThreshold))
-      .sort((a, b) => (b.inventoryQuantity ?? 0) - (a.inventoryQuantity ?? 0)),
-    [products, stalledThreshold],
+  const bestSellerIds = useMemo(() => {
+    const top = [...products]
+      .filter((p) => p.unitsSoldWeek > 0)
+      .sort((a, b) => b.unitsSoldWeek - a.unitsSoldWeek)
+      .slice(0, 10)
+    return new Set(top.map((p) => p.productId).filter((id): id is number => id != null))
+  }, [products])
+
+  const collectionOptions = useMemo(
+    () => [...new Set(products.map((p) => categoryFor(p) || 'Uncategorized'))].sort(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [products, categoryOverrides],
   )
 
-  const discountResult = useMemo(
-    () => computeRecovery(stalledDetailList, discountFor, cogsFor),
+  const filteredSortedProducts = useMemo(() => {
+    let list = products
+    if (activeFilter === 'soldout') list = list.filter(isSoldOutLive)
+    else if (activeFilter === 'stalled') list = list.filter((p) => isStalled(p, STALLED_DAYS))
+
+    const q = debouncedQuery.trim().toLowerCase()
+    if (q) list = list.filter((p) => p.title.toLowerCase().includes(q))
+
+    if (collectionFilter !== 'all') {
+      list = list.filter((p) => (categoryFor(p) || 'Uncategorized') === collectionFilter)
+    }
+
+    function statusRankFor(p: ProductSummary): number {
+      const isBest = p.productId != null && bestSellerIds.has(p.productId)
+      if (isBest) return STATUS_RANK.bestseller
+      if (isSoldOutLive(p)) return STATUS_RANK.soldout
+      if (isStalled(p, STALLED_DAYS)) return STATUS_RANK.stalled
+      return STATUS_RANK.none
+    }
+
+    const sorted = [...list]
+    sorted.sort((a, b) => {
+      let cmp = 0
+      switch (sortKey) {
+        case 'name': cmp = a.title.localeCompare(b.title); break
+        case 'bestselling': cmp = a.unitsSoldWeek - b.unitsSoldWeek; break
+        case 'margin': {
+          const am = marginAt(a.price, cogsFor(a))?.amount ?? -Infinity
+          const bm = marginAt(b.price, cogsFor(b))?.amount ?? -Infinity
+          cmp = am - bm
+          break
+        }
+        case 'daysStalled': cmp = daysStalledFor(a) - daysStalledFor(b); break
+        case 'onhand': cmp = (a.inventoryQuantity ?? -Infinity) - (b.inventoryQuantity ?? -Infinity); break
+        case 'price': cmp = (a.price ?? -Infinity) - (b.price ?? -Infinity); break
+        case 'status': cmp = statusRankFor(a) - statusRankFor(b); break
+        default: cmp = 0
+      }
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+    return sorted
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [stalledDetailList, selectedDiscount, rowDiscountOverrides, cogsOverrides],
-  )
+  }, [products, activeFilter, debouncedQuery, collectionFilter, sortKey, sortDir, bestSellerIds, categoryOverrides, cogsOverrides])
+
+  const resolvedRows: ResolvedRow[] = useMemo(() => {
+    return filteredSortedProducts.map((p) => {
+      const isBest = p.productId != null && bestSellerIds.has(p.productId)
+      const soldOut = isSoldOutLive(p)
+      const stalledRow = isStalled(p, STALLED_DAYS)
+      const badge: StatusBadge = isBest ? 'bestseller' : soldOut ? 'soldout' : stalledRow ? 'stalled' : null
+      return {
+        product: p,
+        badge,
+        isStalledRow: stalledRow,
+        isSoldOutLive: soldOut,
+        category: categoryFor(p),
+        cost: cogsFor(p),
+        manualCost: manualCogsFor(p),
+        margin: marginAt(p.price, cogsFor(p)),
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides])
 
   return (
     <section className="max-w-full">
@@ -804,17 +1243,7 @@ export default function ProductsInventory({
         <div>
           <h2 className="font-serif text-3xl text-charcoal-700 tracking-tight">Products &amp; Inventory</h2>
           <p className="text-sm text-charcoal-400 mt-1.5">
-            {view === 'overview'
-              ? 'Inventory health at a glance'
-              : view === 'products'
-              ? source === 'catalog'
-                ? 'Your full product catalog'
-                : 'Products sold in the last 12 months'
-              : view === 'collections'
-              ? 'Products grouped by category'
-              : view === 'product-detail'
-              ? 'Related products & cross-sell'
-              : `Top sellers by units — ${bestSellerPeriod === 'week' ? 'trailing 7 days' : 'trailing 30 days'}`}
+            {source === 'catalog' ? 'Your full product catalog' : 'Products sold in the last 12 months'}
           </p>
         </div>
         <button
@@ -824,39 +1253,6 @@ export default function ProductsInventory({
         >
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           Refresh
-        </button>
-      </div>
-
-      {/* Tab bar — Overview gets its own colour; every other tab (including the Stalled
-          shortcut, which just jumps into Overview's stalled drill-down) shares another. */}
-      <div className="flex gap-1 mb-6 bg-sand-100 p-1 rounded-xl w-fit flex-wrap">
-        <button
-          onClick={() => { setView('overview'); setOverviewScreen('summary') }}
-          className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all
-            ${view === 'overview' && overviewScreen !== 'stalled'
-              ? 'bg-terracotta-500 text-white shadow-sm'
-              : 'text-charcoal-400 hover:text-charcoal-600'}`}
-        >
-          Overview
-        </button>
-        {(['products', 'collections', 'bestsellers'] as const).map((v) => (
-          <button
-            key={v}
-            onClick={() => setView(v)}
-            className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all
-              ${view === v ? 'bg-olive-600 text-white shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
-          >
-            {v === 'products' ? 'Products' : v === 'collections' ? 'Products by Collection' : 'Best Sellers'}
-          </button>
-        ))}
-        <button
-          onClick={() => { setView('overview'); setOverviewScreen('stalled') }}
-          className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all
-            ${view === 'overview' && overviewScreen === 'stalled'
-              ? 'bg-olive-600 text-white shadow-sm'
-              : 'text-charcoal-400 hover:text-charcoal-600'}`}
-        >
-          Stalled
         </button>
       </div>
 
@@ -872,7 +1268,7 @@ export default function ProductsInventory({
         <p className="text-sm text-charcoal-400 italic py-12 text-center">No products found.</p>
       )}
 
-      {!loading && !error && source === 'orders' && view !== 'overview' && (
+      {!loading && !error && source === 'orders' && (
         <div className="flex items-center gap-3 p-4 mb-6 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
           <Info size={16} className="shrink-0" />
           Showing only products sold in the last 12 months — full catalog access isn&apos;t active for this Shopify
@@ -880,754 +1276,142 @@ export default function ProductsInventory({
         </div>
       )}
 
-      {/* ─── Overview ────────────────────────────────────────────────────── */}
-
-      {!loading && !error && products.length > 0 && view === 'overview' && (
-        <>
-          {!inventoryAvailable && (
-            <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
-              <Info size={16} className="shrink-0" />
-              Inventory data needs a Shopify reconnect — full catalog access isn&apos;t active for this connection yet,
-              so units-on-hand, sold-out, and stalled-inventory figures can&apos;t be computed. Reconnecting Shopify
-              from the app usually resolves this.
-            </div>
-          )}
-
-          {inventoryAvailable && overviewScreen === 'summary' && (
-            <div className="grid grid-cols-3 gap-4">
-              <OverviewCard
-                icon={<Boxes size={12} />}
-                label="Total Inventory"
-                value={totalInventoryUnits.toLocaleString()}
-                sub={`${products.length} products`}
-                onClick={() => setOverviewScreen('inventory')}
-              />
-              <OverviewCard
-                icon={<XCircle size={12} />}
-                label="Sold Out, Still Live"
-                value={soldOutProducts.length.toLocaleString()}
-                sub="in stock = 0, visible on store"
-                onClick={() => setOverviewScreen('sold-out')}
-              />
-              <OverviewCard
-                icon={<Clock size={12} />}
-                label="Stalled Inventory"
-                value={`${stalledSummary.units.toLocaleString()} units`}
-                sub={money(stalledSummary.value)}
-                footnote={`Stalled = no sale in over ${stalledThreshold} days.`}
-                onClick={() => setOverviewScreen('stalled')}
-              />
-            </div>
-          )}
-
-          {inventoryAvailable && overviewScreen === 'inventory' && (
-            <>
-              <BackButton onClick={() => setOverviewScreen('summary')} label="Back to overview" />
-              <h3 className="font-serif text-2xl text-charcoal-700 tracking-tight mb-4">Total Inventory</h3>
-              <div className="bg-white rounded-2xl shadow-card p-5">
-                <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-4">
-                  Inventory by Product · {alphaProducts.length}
-                </p>
-                <ul className="divide-y divide-sand-200">
-                  {alphaProducts.map((p, i) => (
-                    <li key={p.title} className={`py-3 px-2 rounded-lg flex items-center gap-3 ${zebraClass(i)}`}>
-                      <ProductThumb imageUrl={p.imageUrl} title={p.title} />
-                      <div className="flex-1 min-w-0">
-                        <ProductTitleButton product={p} onOpen={openProductDetail} className="text-sm text-charcoal-700 truncate block" />
-                        <p className="text-[11px] text-charcoal-300">{categoryFor(p) || 'Uncategorized'}</p>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <p className="text-sm font-medium text-charcoal-700">{(p.inventoryQuantity ?? 0).toLocaleString()} on hand</p>
-                        <p className="text-xs text-charcoal-400 capitalize">{p.status ?? '—'}</p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </>
-          )}
-
-          {inventoryAvailable && overviewScreen === 'sold-out' && (
-            <>
-              <BackButton onClick={() => setOverviewScreen('summary')} label="Back to overview" />
-              <h3 className="font-serif text-2xl text-charcoal-700 tracking-tight mb-4">Sold Out, Still Live</h3>
-              {soldOutProducts.length === 0 ? (
-                <p className="text-sm text-charcoal-400 italic py-12 text-center">No sold-out products currently live.</p>
-              ) : (
-                <div className="bg-white rounded-2xl shadow-card p-5">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-4">
-                    Sold Out, Still Live · {soldOutProducts.length}
-                  </p>
-                  <ul className="divide-y divide-sand-200">
-                    {soldOutProducts.map((p, i) => {
-                      const hidden = p.productId != null && manuallyHiddenIds.has(p.productId)
-                      const confirming = p.productId != null && confirmHideId === p.productId
-                      const busy = p.productId != null && hidingId === p.productId
-                      const rowError = p.productId != null ? hideErrors[p.productId] : undefined
-                      return (
-                        <li key={p.title} className={`py-3 px-2 rounded-lg flex items-center gap-3 ${zebraClass(i)}`}>
-                          <ProductThumb imageUrl={p.imageUrl} title={p.title} />
-                          <div className="flex-1 min-w-0">
-                            <ProductTitleButton product={p} onOpen={openProductDetail} className="text-sm text-charcoal-700 truncate block" />
-                            <p className="text-[11px] text-charcoal-300">
-                              {categoryFor(p) || 'Uncategorized'} · Last sold {formatDate(p.lastSoldAt)}
-                            </p>
-                            {rowError && <p className="text-[11px] text-red-500 mt-0.5">{rowError}</p>}
-                          </div>
-                          <div className="shrink-0">
-                            {hidden ? (
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs px-2 py-1 rounded-full bg-olive-100 text-olive-600">Hidden</span>
-                                <button
-                                  onClick={() => setProductLiveStatus(p, 'active')}
-                                  disabled={busy}
-                                  className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border border-sand-300 text-charcoal-600 hover:border-olive-400 hover:text-olive-600 transition-colors disabled:opacity-50"
-                                >
-                                  {busy ? <Loader2 size={11} className="animate-spin" /> : null}
-                                  Undo — Show on Store
-                                </button>
-                              </div>
-                            ) : confirming ? (
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => setProductLiveStatus(p, 'draft')}
-                                  disabled={busy}
-                                  className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg bg-red-500 text-white hover:bg-red-600 disabled:opacity-50"
-                                >
-                                  {busy ? <Loader2 size={11} className="animate-spin" /> : null}
-                                  Confirm hide?
-                                </button>
-                                <button onClick={() => setConfirmHideId(null)} className="text-xs px-2 py-1 text-charcoal-400 hover:text-charcoal-600">
-                                  Cancel
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => setConfirmHideId(p.productId)}
-                                disabled={p.productId == null}
-                                className="text-xs px-3 py-1.5 rounded-lg border border-sand-300 text-charcoal-600 hover:border-red-300 hover:text-red-600 transition-colors disabled:opacity-40"
-                              >
-                                Hide from Store
-                              </button>
-                            )}
-                          </div>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </div>
-              )}
-            </>
-          )}
-
-          {inventoryAvailable && overviewScreen === 'stalled' && (
-            <>
-              <BackButton onClick={() => setOverviewScreen('summary')} label="Back to overview" />
-              <h3 className="font-serif text-2xl text-charcoal-700 tracking-tight mb-4">Stalled Inventory</h3>
-
-              <div className="flex gap-2 mb-6">
-                {([90, 180, 365] as const).map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => setStalledThreshold(d)}
-                    className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors
-                      ${stalledThreshold === d
-                        ? 'bg-terracotta-500 text-white shadow-sm'
-                        : 'bg-white border border-sand-300 text-charcoal-500 hover:bg-sand-100 hover:border-sand-400'
-                      }`}
-                  >
-                    {d}+ Days
-                  </button>
-                ))}
-              </div>
-
-              {stalledDetailList.length === 0 ? (
-                <p className="text-sm text-charcoal-400 italic py-12 text-center">No stalled products at this threshold.</p>
-              ) : (
-                <div className="bg-white rounded-2xl shadow-card p-5">
-                  <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-                    <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400">
-                      Stalled {stalledThreshold}+ Days · {stalledDetailList.length} products
-                    </p>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <div className="flex items-center gap-1 bg-sand-100 p-1 rounded-xl flex-wrap">
-                        {DISCOUNT_OPTIONS.map((d) => (
-                          <button
-                            key={d}
-                            onClick={() => { setSelectedDiscount(d); setCustomDiscountInput('') }}
-                            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all
-                              ${selectedDiscount === d && customDiscountInput === ''
-                                ? 'bg-terracotta-500 text-white shadow-sm'
-                                : 'text-charcoal-500 hover:text-charcoal-700'}`}
-                          >
-                            {d === 0 ? 'No Discount' : `${Math.round(d * 100)}% Off`}
-                          </button>
-                        ))}
-                        <div
-                          className={`flex items-center gap-1 pl-2 pr-1.5 py-1 rounded-lg transition-all
-                            ${customDiscountInput !== '' ? 'bg-terracotta-500 shadow-sm' : ''}`}
-                        >
-                          <span className={`text-xs font-medium ${customDiscountInput !== '' ? 'text-white' : 'text-charcoal-500'}`}>
-                            Custom
-                          </span>
-                          <input
-                            type="number"
-                            min={0}
-                            max={95}
-                            placeholder="%"
-                            value={customDiscountInput}
-                            onChange={(e) => {
-                              const raw = e.target.value
-                              setCustomDiscountInput(raw)
-                              const v = parseFloat(raw)
-                              if (Number.isFinite(v)) setSelectedDiscount(Math.max(0, Math.min(95, v)) / 100)
-                            }}
-                            className={`w-11 px-1 py-0.5 text-xs rounded border-0 focus:outline-none focus:ring-1 focus:ring-terracotta-300
-                              ${customDiscountInput !== '' ? 'bg-terracotta-400 text-white placeholder-terracotta-100' : 'bg-white text-charcoal-700'}`}
-                          />
-                          <span className={`text-xs ${customDiscountInput !== '' ? 'text-white' : 'text-charcoal-400'}`}>%</span>
-                        </div>
-                      </div>
-                      <span className="text-xs text-charcoal-400 whitespace-nowrap">— default applied to every row below</span>
-                    </div>
-                  </div>
-
-                  {/* Aggregate totals at the selected discount */}
-                  <div className="grid grid-cols-3 gap-4 mb-5 pb-5 border-b border-sand-200">
-                    <div>
-                      <p className="text-xs text-charcoal-400">Potential Recovered Revenue</p>
-                      <p className="text-lg font-serif font-semibold text-charcoal-700">{money(discountResult.recoveredRevenue)}</p>
-                    </div>
-                    <div>
-                      <p
-                        className="text-xs text-charcoal-400"
-                        title="The cost of the on-hand stalled inventory itself — this is fixed by what's on the shelf and doesn't change as you adjust the discount %."
-                      >
-                        Cost Basis at Risk
-                      </p>
-                      <p className="text-lg font-serif font-semibold text-charcoal-700">{money(discountResult.costRecovered)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-charcoal-400">Net Margin</p>
-                      <p className={`text-lg font-serif font-semibold ${discountResult.netMargin < 0 ? 'text-red-600' : 'text-olive-600'}`}>
-                        {money(discountResult.netMargin)}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className={`w-full min-w-[1080px] text-sm border-separate border-spacing-0 ${COLUMN_BAND_CLASS}`}>
-                      <thead>
-                        <tr className="text-left text-xs text-charcoal-400 uppercase tracking-wide border-b border-sand-200">
-                          <th className="pb-3 pr-4 font-medium whitespace-nowrap">Product</th>
-                          <th className="pb-3 px-4 font-medium text-right whitespace-nowrap">On Hand</th>
-                          <th className="pb-3 px-4 font-medium text-right whitespace-nowrap">Selling Price</th>
-                          <th className="pb-3 px-4 font-medium whitespace-nowrap">Cost</th>
-                          <th className="pb-3 px-4 font-medium text-right whitespace-nowrap">Margin</th>
-                          <th className="pb-3 px-4 font-medium text-right whitespace-nowrap">Discount %</th>
-                          <th className="pb-3 px-4 font-medium text-right whitespace-nowrap">Price @ Discount</th>
-                          <th className="pb-3 px-4 font-medium text-right whitespace-nowrap">Margin @ Discount</th>
-                          <th className="pb-3 pl-4 font-medium text-right whitespace-nowrap" title="Units on hand × price at the discount above">Total Recovered</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-sand-200">
-                        {stalledDetailList.map((p, i) => {
-                          const units = p.inventoryQuantity ?? 0
-                          const cost = cogsFor(p)
-                          const margin = marginFor(p, cost)
-                          const rowDiscount = discountFor(p)
-                          const hasOverride = rowDiscountOverrides[p.title] !== undefined
-                          const discountedPrice = p.price != null ? p.price * (1 - rowDiscount) : null
-                          const discountedMargin = discountedPrice != null && cost != null
-                            ? { amount: discountedPrice - cost, percent: discountedPrice !== 0 ? ((discountedPrice - cost) / discountedPrice) * 100 : 0 }
-                            : null
-                          const recovery = discountedPrice != null ? units * discountedPrice : null
-                          const belowCost = discountedMargin != null && discountedMargin.amount < 0
-                          return (
-                            <tr key={p.title} className={belowCost ? 'bg-red-50' : zebraClass(i)}>
-                              <td className="py-3 pr-4">
-                                <div className="flex items-center gap-2">
-                                  <ProductThumb imageUrl={p.imageUrl} title={p.title} />
-                                  <div className="min-w-0">
-                                    <ProductTitleButton product={p} onOpen={openProductDetail} className="text-sm text-charcoal-700 truncate max-w-[180px] block" />
-                                    <p className="text-[10px] text-charcoal-300 whitespace-nowrap">
-                                      {(() => {
-                                        if (p.lastSoldAt) return `${daysSince(p.lastSoldAt)}d since last sale`
-                                        const listedRef = p.publishedAt ?? p.createdAt
-                                        return listedRef ? `Never sold — listed ${daysSince(listedRef)}d ago` : 'Never sold'
-                                      })()}
-                                    </p>
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">{units.toLocaleString()}</td>
-                              <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">{p.price != null ? money(p.price) : '—'}</td>
-                              <td className="py-3 px-4 whitespace-nowrap">
-                                <CogsEditor
-                                  productId={p.productId}
-                                  sku={p.sku}
-                                  nativeValue={p.nativeCogs}
-                                  manualValue={manualCogsFor(p)}
-                                  currency={currency}
-                                  locale={locale}
-                                  onAssign={handleCogsAssigned}
-                                />
-                              </td>
-                              <td className="py-3 px-4 text-right whitespace-nowrap"><MarginLabel margin={margin} currency={currency} locale={locale} /></td>
-                              <td className="py-3 px-4 whitespace-nowrap">
-                                <div className="flex items-center justify-end gap-1">
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    max={95}
-                                    value={Math.round(rowDiscount * 100)}
-                                    onChange={(e) => {
-                                      const v = Number(e.target.value)
-                                      if (Number.isFinite(v)) setRowDiscount(p.title, Math.max(0, Math.min(95, v)) / 100)
-                                    }}
-                                    className={`w-14 px-1.5 py-1 text-xs border rounded-lg text-right focus:outline-none focus:border-terracotta-400
-                                      ${hasOverride ? 'border-terracotta-300 bg-terracotta-100/40' : 'border-sand-300'}`}
-                                  />
-                                  <span className="text-[10px] text-charcoal-300">%</span>
-                                  {hasOverride && (
-                                    <button
-                                      onClick={() => setRowDiscount(p.title, null)}
-                                      className="text-[10px] text-charcoal-300 hover:text-red-400"
-                                      title="Reset to the default discount"
-                                    >
-                                      ✕
-                                    </button>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">{discountedPrice != null ? money(discountedPrice) : '—'}</td>
-                              <td className="py-3 px-4 text-right whitespace-nowrap"><MarginLabel margin={discountedMargin} currency={currency} locale={locale} /></td>
-                              <td className="py-3 pl-4 text-right text-charcoal-700 whitespace-nowrap">{recovery != null ? money(recovery) : '—'}</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </>
-      )}
-
-      {/* ─── Products ────────────────────────────────────────────────────── */}
-
-      {!loading && !error && products.length > 0 && view === 'products' && (
-        <div className="bg-white rounded-2xl shadow-card p-5">
-          <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-4">
-            All Products · {products.length}
-          </p>
-          <div className="overflow-x-auto">
-            <table className={`w-full min-w-[820px] text-sm border-separate border-spacing-0 ${COLUMN_BAND_CLASS}`}>
-              <thead>
-                <tr className="text-left text-xs text-charcoal-400 uppercase tracking-wide border-b border-sand-200">
-                  <SortHeader label="Product" sortKeyValue="title" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-                  <SortHeader label="Category" sortKeyValue="category" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-                  <SortHeader label="Selling Price" sortKeyValue="price" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="right" />
-                  <th className="pb-3 px-4 font-medium whitespace-nowrap">Cost</th>
-                  <SortHeader label="Margin" sortKeyValue="margin" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="right" />
-                  <th className="pb-3 px-4 font-medium text-right whitespace-nowrap">Sold</th>
-                  <th className="pb-3 px-4 font-medium text-right whitespace-nowrap">On Hand</th>
-                  <th className="pb-3 pl-4 font-medium text-right whitespace-nowrap">Revenue</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-sand-200">
-                {sortedProducts.map((p, i) => {
-                  const stalled = p.inventoryQuantity != null && p.inventoryQuantity > 0 && p.unitsSold === 0
-                    && isStalled(p, stalledThreshold)
-                  const margin = marginFor(p, cogsFor(p))
-                  return (
-                    <tr key={p.title} className={zebraClass(i)}>
-                      <td className="py-3 pr-4">
-                        <div className="flex items-center gap-2">
-                          <ProductThumb imageUrl={p.imageUrl} title={p.title} />
-                          <div className="min-w-0">
-                            <button
-                              onClick={() => openProductDetail(p)}
-                              disabled={p.productId == null}
-                              className="text-sm text-charcoal-700 truncate max-w-[200px] text-left hover:text-terracotta-600 hover:underline disabled:no-underline disabled:cursor-default block"
-                              title={p.productId != null ? 'View related products' : undefined}
-                            >
-                              {p.title}
-                            </button>
-                            {p.vendor && <p className="text-[10px] text-charcoal-300 truncate">{p.vendor}</p>}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <CategoryEditor title={p.title} assignedCategory={categoryFor(p)} onAssign={handleCategoryAssigned} />
-                          {stalled && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200 whitespace-nowrap">
-                              Stalled
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">{p.price != null ? money(p.price) : '—'}</td>
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <CogsEditor
-                          productId={p.productId}
-                          sku={p.sku}
-                          nativeValue={p.nativeCogs}
-                          manualValue={manualCogsFor(p)}
-                          currency={currency}
-                          locale={locale}
-                          onAssign={handleCogsAssigned}
-                        />
-                      </td>
-                      <td className="py-3 px-4 text-right whitespace-nowrap"><MarginLabel margin={margin} currency={currency} locale={locale} /></td>
-                      <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">{p.unitsSold.toLocaleString()}</td>
-                      <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">
-                        {p.inventoryQuantity != null ? p.inventoryQuantity.toLocaleString() : '—'}
-                      </td>
-                      <td className="py-3 pl-4 text-right text-charcoal-700 whitespace-nowrap">{money(p.revenue)}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+      {!loading && !error && !inventoryAvailable && products.length > 0 && (
+        <div className="flex items-center gap-3 p-4 mb-6 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+          <Info size={16} className="shrink-0" />
+          Inventory data needs a Shopify reconnect — full catalog access isn&apos;t active for this connection yet, so
+          units-on-hand, sold-out, and stalled-inventory figures can&apos;t be computed. Reconnecting Shopify from the
+          app usually resolves this.
         </div>
       )}
 
-      {/* ─── Product Detail (related products & cross-sell) ───────────────── */}
-
-      {!loading && !error && view === 'product-detail' && selectedProduct && (
+      {!loading && !error && inventoryAvailable && products.length > 0 && (
         <>
-          <BackButton onClick={() => setView('products')} label="Back to products" />
-          <div className="flex items-center gap-3 mb-6">
-            <ProductThumb imageUrl={selectedProduct.imageUrl} title={selectedProduct.title} />
-            <h3 className="font-serif text-2xl text-charcoal-700 tracking-tight">{selectedProduct.title}</h3>
+          {/* ─── KPI strip (client-side filter, no navigation) ────────────── */}
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            <KpiCard
+              icon={<Boxes size={12} />}
+              label="Total Inventory"
+              value={totalInventoryUnits.toLocaleString()}
+              sub={`${products.length} products`}
+              active={activeFilter === 'all'}
+              onClick={() => setActiveFilter('all')}
+            />
+            <KpiCard
+              icon={<XCircle size={12} />}
+              label="Sold Out, Still Live"
+              value={soldOutProducts.length.toLocaleString()}
+              sub="in stock = 0, visible on store"
+              active={activeFilter === 'soldout'}
+              onClick={() => setActiveFilter((f) => (f === 'soldout' ? 'all' : 'soldout'))}
+            />
+            <KpiCard
+              icon={<Clock size={12} />}
+              label="Stalled Inventory"
+              value={`${stalledSummary.units.toLocaleString()} units`}
+              sub={`Cost basis ${money(stalledSummary.value)} · Potential revenue ${money(stalledSummary.potentialRevenue)}`}
+              footnote={`Stalled = no sale in over ${STALLED_DAYS} days. Potential revenue = full-price sell-through of on-hand stock.`}
+              active={activeFilter === 'stalled'}
+              onClick={() => setActiveFilter((f) => (f === 'stalled' ? 'all' : 'stalled'))}
+            />
           </div>
 
-          <div className="bg-white rounded-2xl shadow-card p-5 mb-6">
-            <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-4">Product Stats</p>
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-4">
-              <div>
-                <p className="text-xs text-charcoal-400">Units Sold</p>
-                <p className="text-lg font-serif font-semibold text-charcoal-700">{selectedProduct.unitsSold.toLocaleString()}</p>
-              </div>
-              <div>
-                <p className="text-xs text-charcoal-400">Revenue</p>
-                <p className="text-lg font-serif font-semibold text-charcoal-700">{money(selectedProduct.revenue)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-charcoal-400">On Hand</p>
-                <p className="text-lg font-serif font-semibold text-charcoal-700">
-                  {selectedProduct.inventoryQuantity != null ? selectedProduct.inventoryQuantity.toLocaleString() : '—'}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-charcoal-400">Selling Price</p>
-                <p className="text-lg font-serif font-semibold text-charcoal-700">
-                  {selectedProduct.price != null ? money(selectedProduct.price) : '—'}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-charcoal-400">Cost</p>
-                <p className="text-lg font-serif font-semibold text-charcoal-700">
-                  {(() => {
-                    const c = cogsFor(selectedProduct)
-                    return c != null ? money(c) : '—'
-                  })()}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-charcoal-400">Margin</p>
-                <p className="text-lg font-serif font-semibold text-charcoal-700">
-                  <MarginLabel margin={marginFor(selectedProduct, cogsFor(selectedProduct))} currency={currency} locale={locale} />
-                </p>
-              </div>
+          {/* ─── Toolbar ─────────────────────────────────────────────────── */}
+          <div className="flex flex-wrap items-center gap-3 mb-4">
+            <div className="relative flex-1 min-w-[220px]">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-charcoal-300" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search products…"
+                className="w-full pl-9 pr-3 py-2 text-sm border border-sand-300 rounded-lg focus:outline-none focus:border-terracotta-400"
+              />
             </div>
-          </div>
-
-          {productDetailError && (
-            <div className="flex items-center gap-3 p-4 mb-6 bg-red-50 border border-red-100 rounded-xl text-sm text-red-700">
-              <AlertCircle size={16} /> {productDetailError}
-            </div>
-          )}
-
-          {loadingProductDetail ? (
-            <LoadingSpinner label="Loading related products…" />
-          ) : (
-            <>
-              <div className="bg-white rounded-2xl shadow-card p-5 mb-6">
-                <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400">
-                    Related Products {relatedData?.computedAt ? `· updated ${formatDate(relatedData.computedAt)}` : '· not computed yet'}
-                  </p>
-                  <button
-                    onClick={recomputeRelated}
-                    disabled={recomputing}
-                    className="flex items-center gap-1.5 text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors px-2.5 py-1 rounded-lg hover:bg-terracotta-100 disabled:opacity-50"
-                  >
-                    <RefreshCw size={12} className={recomputing ? 'animate-spin' : ''} /> Recompute
-                  </button>
-                </div>
-                {relatedEntries.length === 0 ? (
-                  <p className="text-sm text-charcoal-400 italic py-6 text-center">
-                    No related products yet — click Recompute, or this product has no shared collections or frequently
-                    co-purchased items (min. 3 shared orders).
-                  </p>
-                ) : (
-                  <ul className="divide-y divide-sand-200">
-                    {relatedEntries.map((entry, i) => {
-                      const relatedProduct = productsById.get(entry.relatedProductId)
-                      return (
-                        <li key={`${entry.relationType}-${entry.relatedProductId}`} className={`py-2.5 px-2 rounded-lg flex items-center gap-3 ${zebraClass(i)}`}>
-                          <ProductThumb imageUrl={relatedProduct?.imageUrl ?? null} title={relatedProduct?.title ?? entry.relatedProductId} />
-                          {relatedProduct ? (
-                            <ProductTitleButton product={relatedProduct} onOpen={openProductDetail} className="flex-1 min-w-0 text-sm text-charcoal-700 truncate" />
-                          ) : (
-                            <span className="flex-1 min-w-0 text-sm text-charcoal-700 truncate">
-                              {`Product #${entry.relatedProductId}`}
-                            </span>
-                          )}
-                          <span
-                            className={`text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap
-                              ${entry.relationType === 'same-tag'
-                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                : 'bg-olive-100 text-olive-600 border-olive-200'}`}
-                          >
-                            {entry.relationType === 'same-tag' ? 'Same Tag' : `Frequently Bought Together ×${entry.coPurchaseCount}`}
-                          </span>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                )}
-              </div>
-
-              <div className="bg-white rounded-2xl shadow-card p-5">
-                <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-4">Might Be Interested</p>
-
-                <div className="mb-5 pb-5 border-b border-sand-200">
-                  <p className="text-lg font-serif font-semibold text-charcoal-700">
-                    {interestedData?.total ?? 0} customer{(interestedData?.total ?? 0) === 1 ? '' : 's'}
-                    <span className="text-sm font-sans font-normal text-charcoal-400">
-                      {' '}· {customerSharePercent.toFixed(1)}% of your {interestedData?.totalCustomers ?? 0} customers
-                    </span>
-                  </p>
-                  <p className="text-[11px] text-charcoal-300 mt-0.5">
-                    {interestedData?.consented ?? 0} have marketing consent and are eligible for a segment
-                  </p>
-                </div>
-
-                <div className="flex items-center justify-between flex-wrap gap-4 mb-5">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-charcoal-400 whitespace-nowrap">If</span>
-                    <div className="flex items-center gap-1 bg-sand-100 p-1 rounded-xl flex-wrap">
-                      {CONVERSION_OPTIONS.map((c) => (
-                        <button
-                          key={c}
-                          onClick={() => { setConversionRate(c); setCustomConversionInput('') }}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all
-                            ${conversionRate === c && customConversionInput === ''
-                              ? 'bg-terracotta-500 text-white shadow-sm'
-                              : 'text-charcoal-500 hover:text-charcoal-700'}`}
-                        >
-                          {Math.round(c * 100)}%
-                        </button>
-                      ))}
-                      <div
-                        className={`flex items-center gap-1 pl-2 pr-1.5 py-1 rounded-lg transition-all
-                          ${customConversionInput !== '' ? 'bg-terracotta-500 shadow-sm' : ''}`}
-                      >
-                        <span className={`text-xs font-medium ${customConversionInput !== '' ? 'text-white' : 'text-charcoal-500'}`}>
-                          Custom
-                        </span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={100}
-                          placeholder="%"
-                          value={customConversionInput}
-                          onChange={(e) => {
-                            const raw = e.target.value
-                            setCustomConversionInput(raw)
-                            const v = parseFloat(raw)
-                            if (Number.isFinite(v)) setConversionRate(Math.max(0, Math.min(100, v)) / 100)
-                          }}
-                          className={`w-11 px-1 py-0.5 text-xs rounded border-0 focus:outline-none focus:ring-1 focus:ring-terracotta-300
-                            ${customConversionInput !== '' ? 'bg-terracotta-400 text-white placeholder-terracotta-100' : 'bg-white text-charcoal-700'}`}
-                        />
-                        <span className={`text-xs ${customConversionInput !== '' ? 'text-white' : 'text-charcoal-400'}`}>%</span>
-                      </div>
-                    </div>
-                    <span className="text-xs text-charcoal-400 whitespace-nowrap">convert:</span>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-serif font-semibold text-olive-600">{money(estimatedRevenue)}</p>
-                    <p className="text-[11px] text-charcoal-300">estimated potential revenue for this product — not a guaranteed figure</p>
-                  </div>
-                </div>
-
-                {segmentConfirming ? (
-                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
-                    <p className="text-sm text-charcoal-700 mb-3">
-                      This will create a segment in Omnisend named <strong>Might buy: {selectedProduct.title}</strong>,
-                      tagging <strong>{consentedEmails.length}</strong> consented customer{consentedEmails.length === 1 ? '' : 's'} out
-                      of {interestedData?.total ?? 0} total who bought a related product. Non-consented customers are never
-                      included.
-                    </p>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleCreateSegment(selectedProduct, consentedEmails)}
-                        disabled={creatingSegment}
-                        className="flex items-center gap-2 text-sm font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-4 py-2 rounded-lg transition-colors disabled:opacity-60"
-                      >
-                        {creatingSegment && <Loader2 size={14} className="animate-spin" />}
-                        Confirm & Create
-                      </button>
-                      <button
-                        onClick={() => setSegmentConfirming(false)}
-                        disabled={creatingSegment}
-                        className="text-sm text-charcoal-400 hover:text-charcoal-600 px-4 py-2"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setSegmentConfirming(true)}
-                    disabled={consentedEmails.length === 0}
-                    className="text-sm font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-4 py-2 rounded-lg transition-colors disabled:opacity-40"
-                  >
-                    Create Segment
-                  </button>
-                )}
-
-                {segmentResult && (
-                  <p className={`flex items-center gap-2 text-sm mt-3 ${segmentResult.ok ? 'text-olive-600' : 'text-red-600'}`}>
-                    {segmentResult.message}
-                  </p>
-                )}
-              </div>
-            </>
-          )}
-        </>
-      )}
-
-      {/* ─── Products by Collection ──────────────────────────────────────── */}
-
-      {!loading && !error && products.length > 0 && view === 'collections' && (
-        <div className="space-y-3">
-          {collections.map(({ category, items, unitsSold, revenue, inventoryUnits }) => (
-            <CollapsibleCard
-              key={category}
-              label={category}
-              count={items.length}
-              isOpen={openCategory === category}
-              onToggle={() => setOpenCategory(openCategory === category ? null : category)}
-              icon={<Package size={11} />}
+            <select
+              value={collectionFilter}
+              onChange={(e) => setCollectionFilter(e.target.value)}
+              className="px-3 py-2 text-sm border border-sand-300 rounded-lg bg-white text-charcoal-700 focus:outline-none focus:border-terracotta-400"
             >
-              <div className="flex gap-6 mb-4 text-sm">
-                <div>
-                  <p className="text-xs text-charcoal-400">Units Sold</p>
-                  <p className="font-medium text-charcoal-700">{unitsSold.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-charcoal-400">Revenue</p>
-                  <p className="font-medium text-charcoal-700">{money(revenue)}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-charcoal-400">Units on Hand</p>
-                  <p className="font-medium text-charcoal-700">{inventoryAvailable ? inventoryUnits.toLocaleString() : '—'}</p>
-                </div>
-              </div>
-              <ul className="divide-y divide-sand-200">
-                {items.map((p, i) => (
-                  <li key={p.title} className={`py-2.5 px-2 rounded-lg flex items-center gap-3 ${zebraClass(i)}`}>
-                    <ProductThumb imageUrl={p.imageUrl} title={p.title} />
-                    <ProductTitleButton product={p} onOpen={openProductDetail} className="flex-1 min-w-0 text-sm text-charcoal-700 truncate" />
-                    <span className="text-xs text-charcoal-400 shrink-0">{p.unitsSold.toLocaleString()} sold</span>
-                    <span className="text-xs text-charcoal-400 shrink-0">
-                      {p.inventoryQuantity != null ? `${p.inventoryQuantity} on hand` : '— on hand'}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </CollapsibleCard>
-          ))}
-        </div>
-      )}
-
-      {/* ─── Best Sellers ────────────────────────────────────────────────── */}
-
-      {!loading && !error && products.length > 0 && view === 'bestsellers' && (
-        <>
-          <div className="flex gap-2 mb-6">
-            {(['week', 'month'] as const).map((p) => (
-              <button
-                key={p}
-                onClick={() => setBestSellerPeriod(p)}
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors
-                  ${bestSellerPeriod === p
-                    ? 'bg-terracotta-500 text-white shadow-sm'
-                    : 'bg-white border border-sand-300 text-charcoal-500 hover:bg-sand-100 hover:border-sand-400'
-                  }`}
-              >
-                {p === 'week' ? 'This Week' : 'This Month'}
-              </button>
-            ))}
+              <option value="all">All Collections</option>
+              {collectionOptions.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as ProductSortKey)}
+              className="px-3 py-2 text-sm border border-sand-300 rounded-lg bg-white text-charcoal-700 focus:outline-none focus:border-terracotta-400"
+            >
+              <option value="name">Sort: Name</option>
+              <option value="bestselling">Sort: Best Selling</option>
+              <option value="margin">Sort: Margin</option>
+              <option value="daysStalled">Sort: Days Stalled</option>
+            </select>
           </div>
 
-          {bestSellers.length === 0 ? (
-            <p className="text-sm text-charcoal-400 italic py-12 text-center">
-              No units sold in this period yet.
-            </p>
+          {/* ─── Product table ───────────────────────────────────────────── */}
+          {resolvedRows.length === 0 ? (
+            <p className="text-sm text-charcoal-400 italic py-12 text-center">No products match these filters.</p>
           ) : (
             <div className="bg-white rounded-2xl shadow-card p-5">
-              <div className="mb-4">
-                <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 flex items-center gap-1.5">
-                  <TrendingUp size={12} /> Best Sellers — {bestSellerPeriod === 'week' ? 'Trailing 7 Days' : 'Trailing 30 Days'}
-                </p>
-                <p className="text-[11px] text-charcoal-300 mt-1">
-                  {bestSellers.length} product{bestSellers.length === 1 ? '' : 's'} with sales in this period
-                  {bestSellers.length < 5 && ' — more will show up here as sales come in.'}
-                </p>
+              <div className="overflow-x-auto">
+                <table className={`w-full min-w-[820px] text-sm border-separate border-spacing-0 ${COLUMN_BAND_CLASS}`}>
+                  <thead>
+                    <tr className="text-left text-xs text-charcoal-400 uppercase tracking-wide border-b border-sand-200">
+                      <th className="pb-3 pr-4 font-medium">Product</th>
+                      <SortableTh label="On Hand" sortKeyValue="onhand" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+                      <SortableTh label="Price" sortKeyValue="price" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+                      <SortableTh label="Status / Action" sortKeyValue="status" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-sand-200">
+                    {resolvedRows.map((row, i) => {
+                      const p = row.product
+                      const pid = p.productId
+                      const hidden = pid != null && manuallyHiddenIds.has(pid)
+                      const confirmingHide = pid != null && confirmHideId === pid
+                      const hidingBusy = pid != null && hidingId === pid
+                      const hideError = pid != null ? hideErrors[pid] : undefined
+                      const expanded = pid != null && expandedRows.has(pid)
+                      const relatedEntries = pid != null ? relatedData?.relations[String(pid)] ?? [] : []
+                      const interestedData = pid != null ? interestedCache[pid] ?? null : null
+                      const interestedLoading = pid != null && interestedLoadingIds.has(pid)
+                      const interestedError = pid != null ? interestedErrors[pid] ?? null : null
+                      return (
+                        <ProductRow
+                          key={p.title}
+                          row={row}
+                          index={i}
+                          currency={currency}
+                          locale={locale}
+                          expanded={expanded}
+                          onToggleExpand={() => toggleExpand(pid)}
+                          onAssignCategory={handleCategoryAssigned}
+                          onAssignCogs={handleCogsAssigned}
+                          hidden={hidden}
+                          confirmingHide={confirmingHide}
+                          hidingBusy={hidingBusy}
+                          hideError={hideError}
+                          onRequestHide={() => setConfirmHideId(pid)}
+                          onConfirmHide={() => setProductLiveStatus(p, 'draft')}
+                          onCancelHide={() => setConfirmHideId(null)}
+                          onUndoHide={() => setProductLiveStatus(p, 'active')}
+                          relatedEntries={relatedEntries}
+                          productsById={productsById}
+                          interestedData={interestedData}
+                          interestedLoading={interestedLoading}
+                          interestedError={interestedError}
+                          onRecomputeRelated={recomputeRelated}
+                          recomputingRelated={recomputingRelated}
+                          relatedComputedAt={relatedData?.computedAt ?? null}
+                          onCreateSegment={handleCreateSegment}
+                        />
+                      )
+                    })}
+                  </tbody>
+                </table>
               </div>
-              <ul className="divide-y divide-sand-200">
-                {bestSellers.map((p, i) => {
-                  const units = bestSellerPeriod === 'week' ? p.unitsSoldWeek : p.unitsSoldMonth
-                  const lowStock = p.inventoryQuantity != null && p.inventoryQuantity <= LOW_STOCK_THRESHOLD
-                  return (
-                    <li key={p.title} className={`py-3 px-2 rounded-lg flex items-center gap-3 ${zebraClass(i)}`}>
-                      <span className="w-5 shrink-0 text-sm font-serif font-semibold text-charcoal-300">{i + 1}</span>
-                      <ProductThumb imageUrl={p.imageUrl} title={p.title} />
-                      <div className="flex-1 min-w-0">
-                        <ProductTitleButton product={p} onOpen={openProductDetail} className="text-sm text-charcoal-700 truncate block" />
-                        {categoryFor(p) && <p className="text-[11px] text-charcoal-300">{categoryFor(p)}</p>}
-                        {lowStock && (
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[11px] font-semibold text-red-600">
-                              Low in stock ({p.inventoryQuantity} left)
-                            </span>
-                            <a
-                              href={reorderMailto(p)}
-                              className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
-                            >
-                              <Mail size={10} /> Re-order
-                            </a>
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-right shrink-0">
-                        <p className="text-sm font-medium text-charcoal-700">{units.toLocaleString()} sold</p>
-                        <p className="text-xs text-charcoal-400">{money(p.revenue)} total</p>
-                      </div>
-                    </li>
-                  )
-                })}
-              </ul>
             </div>
           )}
         </>
