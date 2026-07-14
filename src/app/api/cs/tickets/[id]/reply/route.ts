@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { readTickets, writeTickets } from '@/lib/cs-storage'
-import { replyToMessage } from '@/lib/ms-graph'
+import { replyToMessage, sendNewEmail } from '@/lib/ms-graph'
 import { randomUUID } from 'crypto'
 import type { CSMessage } from '@/types'
 
@@ -17,7 +17,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (!isNote) {
     try {
-      await replyToMessage(tickets[idx].messageId, body)
+      // Tickets created manually (not synced from a real inbound email) have no Outlook
+      // message to reply to — send a fresh email instead.
+      if (tickets[idx].messageId) {
+        await replyToMessage(tickets[idx].messageId, body)
+      } else {
+        await sendNewEmail(tickets[idx].from, tickets[idx].subject, body)
+      }
     } catch (err) {
       return NextResponse.json({ error: err instanceof Error ? err.message : 'Send failed' }, { status: 500 })
     }

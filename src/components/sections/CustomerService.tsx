@@ -44,6 +44,7 @@ function TicketDetail({
   onNavigateToCustomer,
   emailHidden,
   onToggleEmail,
+  initialReplyBody,
 }: {
   ticket: CSTicket
   macros: CSMacro[]
@@ -60,9 +61,10 @@ function TicketDetail({
   onNavigateToCustomer?: (email: string) => void
   emailHidden: boolean
   onToggleEmail: () => void
+  initialReplyBody?: string
 }) {
   const [ticket, setTicket] = useState(initial)
-  const [replyBody, setReplyBody] = useState('')
+  const [replyBody, setReplyBody] = useState(initialReplyBody ?? '')
   const [mode, setMode] = useState<'reply' | 'note'>('reply')
   const [sending, setSending] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -764,11 +766,15 @@ function TagsOverview({
 export default function CustomerService({
   openTicketId,
   onOpenTicketHandled,
+  openReplyBody,
+  onOpenReplyBodyHandled,
   onNavigateToCustomer,
   onBackToSalesOverview,
 }: {
   openTicketId?: string | null
   onOpenTicketHandled?: () => void
+  openReplyBody?: string | null
+  onOpenReplyBodyHandled?: () => void
   onNavigateToCustomer?: (email: string) => void
   onBackToSalesOverview?: () => void
 } = {}) {
@@ -784,6 +790,7 @@ export default function CustomerService({
   const [statusFilter, setStatusFilter] = useState<TicketStatus>('open')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedTicket, setSelectedTicket] = useState<CSTicket | null>(null)
+  const [pendingReplyBody, setPendingReplyBody] = useState<{ ticketId: string; body: string } | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [bulkMoving, setBulkMoving] = useState(false)
@@ -838,10 +845,12 @@ export default function CustomerService({
     if (found) {
       setStatusFilter(found.status)
       setSelectedTicket(found)
+      setPendingReplyBody(openReplyBody ? { ticketId: found.id, body: openReplyBody } : null)
       setTab('tickets')
     }
     onOpenTicketHandled?.()
-  }, [openTicketId, loading, tickets, onOpenTicketHandled])
+    onOpenReplyBodyHandled?.()
+  }, [openTicketId, loading, tickets, onOpenTicketHandled, openReplyBody, onOpenReplyBodyHandled])
 
   async function sync() {
     setSyncing(true)
@@ -1178,7 +1187,8 @@ export default function CustomerService({
                 hasNext={idx < filtered.length - 1}
                 onPrev={() => setSelectedTicket(filtered[idx - 1])}
                 onNext={() => setSelectedTicket(filtered[idx + 1])}
-                onBack={() => setSelectedTicket(null)}
+                onBack={() => { setSelectedTicket(null); setPendingReplyBody(null) }}
+                initialReplyBody={pendingReplyBody?.ticketId === selectedTicket.id ? pendingReplyBody.body : undefined}
                 onTagCreated={(tag) => setCustomTags((prev) => prev.includes(tag) ? prev : [...prev, tag])}
                 onNavigateToCustomer={onNavigateToCustomer}
                 emailHidden={hiddenEmails.has(selectedTicket.from.toLowerCase())}

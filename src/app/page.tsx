@@ -15,6 +15,7 @@ import AboutTool from '@/components/sections/AboutTool'
 export default function Home() {
   const [active, setActive] = useState<SectionId>('sales-overview')
   const [openTicketId, setOpenTicketId] = useState<string | null>(null)
+  const [openReplyBody, setOpenReplyBody] = useState<string | null>(null)
   const [openCustomerEmail, setOpenCustomerEmail] = useState<string | null>(null)
   const [openProductId, setOpenProductId] = useState<number | null>(null)
   const [productsFilter, setProductsFilter] = useState<'soldout' | 'stalled' | null>(null)
@@ -31,8 +32,9 @@ export default function Home() {
     setActive(id)
   }
 
-  function goToTicket(ticketId: string) {
+  function goToTicket(ticketId: string, replyBody?: string) {
     setOpenTicketId(ticketId)
+    setOpenReplyBody(replyBody ?? null)
     goToSection('customer-service')
   }
 
@@ -77,6 +79,7 @@ export default function Home() {
             {active === 'late-shipments'        && (
               <LateShipments
                 onBackToSalesOverview={cameFromSalesOverview ? goBackToSalesOverview : undefined}
+                onNavigateToTicket={goToTicket}
               />
             )}
             {active === 'products-inventory'    && (
@@ -103,6 +106,8 @@ export default function Home() {
               <CustomerService
                 openTicketId={openTicketId}
                 onOpenTicketHandled={() => setOpenTicketId(null)}
+                openReplyBody={openReplyBody}
+                onOpenReplyBodyHandled={() => setOpenReplyBody(null)}
                 onNavigateToCustomer={goToCustomer}
                 onBackToSalesOverview={cameFromSalesOverview ? goBackToSalesOverview : undefined}
               />

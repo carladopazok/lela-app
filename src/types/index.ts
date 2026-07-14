@@ -147,8 +147,16 @@ export interface LateShipment {
   customerEmail: string
   createdAt: string
   daysLate: number
-  items: Array<{ title: string; quantity: number }>
+  items: Array<{
+    title: string
+    quantity: number
+    productId: number | null
+    short: boolean | null
+    relatedProductTitles: string[]
+  }>
   totalPrice: string
+  stockStatus: 'in-stock' | 'sold-out' | 'unknown'
+  contactedAt: string | null
 }
 
 export interface SalesMetrics {
@@ -185,6 +193,7 @@ export interface CSTicket {
   status: TicketStatus
   tags: TicketTag[]
   thread: CSMessage[]
+  relatedOrderName?: string
 }
 
 export interface CSMacro {
