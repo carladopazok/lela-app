@@ -765,10 +765,12 @@ export default function CustomerService({
   openTicketId,
   onOpenTicketHandled,
   onNavigateToCustomer,
+  onBackToSalesOverview,
 }: {
   openTicketId?: string | null
   onOpenTicketHandled?: () => void
   onNavigateToCustomer?: (email: string) => void
+  onBackToSalesOverview?: () => void
 } = {}) {
   const [tab, setTab] = useState<'tickets' | 'macros' | 'tags'>('tickets')
   const [tickets, setTickets] = useState<CSTicket[]>([])
@@ -923,6 +925,14 @@ export default function CustomerService({
 
   return (
     <section className="max-w-4xl">
+      {onBackToSalesOverview && (
+        <button
+          onClick={onBackToSalesOverview}
+          className="flex items-center gap-1.5 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors mb-4"
+        >
+          <ArrowLeft size={14} /> Back to Sales Overview
+        </button>
+      )}
       <div className="flex items-start justify-between mb-6">
         <div>
           <h2 className="font-serif text-3xl text-charcoal-700 tracking-tight">Customer Service</h2>

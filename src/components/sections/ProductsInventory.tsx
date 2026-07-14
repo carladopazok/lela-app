@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   RefreshCw, AlertCircle, Package, Check, X, Info, Boxes, XCircle, Clock, Mail, Loader2,
-  Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, Users,
+  Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, ArrowLeft, Users,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
+import { STALLED_DAYS, daysSince, isStalled, isSoldOutLive, getStalledUnitsSummary } from '@/lib/product-metrics'
 import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled'
@@ -18,7 +19,6 @@ const STATUS_RANK: Record<'bestseller' | 'soldout' | 'stalled' | 'none', number>
   bestseller: 0, soldout: 1, stalled: 2, none: 3,
 }
 
-const STALLED_DAYS = 90
 const LOW_STOCK_THRESHOLD = 3
 const DISCOUNT_OPTIONS = [0, 0.2, 0.4, 0.6] as const
 
@@ -30,10 +30,6 @@ function fmt(n: number, currency: string, locale: string) {
     // rather than throwing, so a formatting quirk never blanks out the whole page.
     return n.toLocaleString('en-US', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2 })
   }
-}
-
-function daysSince(iso: string): number {
-  return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
 }
 
 function formatDate(iso: string | null): string {
@@ -48,16 +44,6 @@ function formatDate(iso: string | null): string {
 function daysStalledFor(p: ProductSummary): number {
   const reference = p.lastSoldAt ?? p.publishedAt ?? p.createdAt
   return reference ? daysSince(reference) : 0
-}
-
-function isStalled(p: ProductSummary, thresholdDays: number): boolean {
-  const reference = p.lastSoldAt ?? p.publishedAt ?? p.createdAt
-  if (reference == null) return false
-  return daysSince(reference) >= thresholdDays
-}
-
-function isSoldOutLive(p: ProductSummary): boolean {
-  return p.inventoryQuantity === 0 && p.status === 'active' && p.publishedAt !== null
 }
 
 // Per-unit margin at a given price vs. a given cost — null when either is missing.
@@ -869,9 +855,19 @@ function ProductRow({
 export default function ProductsInventory({
   openProductId,
   onOpenProductHandled,
+  initialFilter,
+  onInitialFilterHandled,
+  initialSort,
+  onInitialSortHandled,
+  onBackToSalesOverview,
 }: {
   openProductId?: number | null
   onOpenProductHandled?: () => void
+  initialFilter?: 'soldout' | 'stalled' | null
+  onInitialFilterHandled?: () => void
+  initialSort?: ProductSortKey | null
+  onInitialSortHandled?: () => void
+  onBackToSalesOverview?: () => void
 } = {}) {
   const [products, setProducts] = useState<ProductSummary[]>([])
   const [currency, setCurrency] = useState('EUR')
@@ -949,6 +945,23 @@ export default function ProductsInventory({
   }
 
   useEffect(() => { load() }, [includeDummy])
+
+  // Deep-link from Sales Overview's Needs Attention strip (stalled/sold-out) — a pure UI
+  // toggle with no data dependency, so it can apply immediately unlike openProductId below.
+  useEffect(() => {
+    if (initialFilter == null) return
+    setActiveFilter(initialFilter)
+    onInitialFilterHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFilter])
+
+  // Deep-link from Sales Overview's "Most sold product" teaser.
+  useEffect(() => {
+    if (initialSort == null) return
+    setSortKey(initialSort)
+    onInitialSortHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSort])
 
   useEffect(() => {
     fetch('/api/shopify/related-products')
@@ -1149,13 +1162,11 @@ export default function ProductsInventory({
 
   const stalledSummary = useMemo(() => {
     const list = products.filter((p) => isStalled(p, STALLED_DAYS))
-    const units = list.reduce((s, p) => s + (p.inventoryQuantity ?? 0), 0)
     const value = list.reduce((s, p) => {
       const cost = cogsFor(p)
       return cost != null ? s + (p.inventoryQuantity ?? 0) * cost : s
     }, 0)
-    const potentialRevenue = list.reduce((s, p) => s + (p.price ?? 0) * (p.inventoryQuantity ?? 0), 0)
-    return { units, value, potentialRevenue }
+    return { ...getStalledUnitsSummary(products), value }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [products, cogsOverrides])
 
@@ -1239,6 +1250,14 @@ export default function ProductsInventory({
 
   return (
     <section className="max-w-full">
+      {onBackToSalesOverview && (
+        <button
+          onClick={onBackToSalesOverview}
+          className="flex items-center gap-1.5 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors mb-4"
+        >
+          <ArrowLeft size={14} /> Back to Sales Overview
+        </button>
+      )}
       <div className="flex items-start justify-between mb-6">
         <div>
           <h2 className="font-serif text-3xl text-charcoal-700 tracking-tight">Products &amp; Inventory</h2>

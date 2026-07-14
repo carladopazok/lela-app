@@ -39,6 +39,19 @@ export function createShopifyClient({ accessToken, shop }: ShopifyAuth) {
     return res.json()
   }
 
+  async function graphql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+    const res = await fetch(`${base}/graphql.json`, {
+      method: 'POST',
+      headers: buildHeaders(token),
+      body: JSON.stringify({ query, variables }),
+      cache: 'no-store',
+    })
+    if (!res.ok) throw new Error(`Shopify ${res.status}: ${await res.text()}`)
+    const json = await res.json()
+    if (json.errors) throw new Error(`Shopify GraphQL error: ${JSON.stringify(json.errors)}`)
+    return json.data
+  }
+
   async function getAll<T>(path: string, key: string, params: Record<string, string> = {}): Promise<T[]> {
     const results: T[] = []
     const initialUrl = new URL(`${base}${path}`)
@@ -67,5 +80,5 @@ export function createShopifyClient({ accessToken, shop }: ShopifyAuth) {
     return results
   }
 
-  return { get, put, getAll }
+  return { get, put, getAll, graphql }
 }

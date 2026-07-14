@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { AlertCircle, RefreshCw } from 'lucide-react'
+import { AlertCircle, ArrowLeft, RefreshCw } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import type { LateShipment } from '@/types'
@@ -10,7 +10,11 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-export default function LateShipments() {
+export default function LateShipments({
+  onBackToSalesOverview,
+}: {
+  onBackToSalesOverview?: () => void
+} = {}) {
   const [shipments, setShipments] = useState<LateShipment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -35,6 +39,14 @@ export default function LateShipments() {
 
   return (
     <section className="max-w-4xl">
+      {onBackToSalesOverview && (
+        <button
+          onClick={onBackToSalesOverview}
+          className="flex items-center gap-1.5 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors mb-4"
+        >
+          <ArrowLeft size={14} /> Back to Sales Overview
+        </button>
+      )}
       <div className="flex items-start justify-between mb-8">
         <div>
           <h2 className="font-serif text-3xl text-charcoal-700 tracking-tight">Late Shipments</h2>
