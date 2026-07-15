@@ -85,6 +85,30 @@ interface OmnisendContactResult {
 // else only searches/patches existing ones) — the /contacts POST body below follows
 // Omnisend's documented v3 "identifiers" shape but is unverified against this account;
 // iterate here if the response comes back malformed or contactID is missing.
+// Counts total Omnisend contacts by paging through /contacts. Assumes offset-based
+// pagination (matching the {previous,next,offset,limit} paging shape already seen on
+// /campaigns) — unverified against this account for /contacts specifically; iterate
+// here if paging works differently (e.g. cursor-based via paging.next as a full URL).
+// Capped at 20 pages (~5,000 contacts at the max page size) as a safety limit.
+export async function countOmnisendContacts(): Promise<number> {
+  const limit = 250
+  let offset = 0
+  let total = 0
+
+  for (let page = 0; page < 20; page++) {
+    const data = await omnisendGet<{ contacts: unknown[]; paging: { next: string | null } }>('/contacts', {
+      limit: String(limit),
+      offset: String(offset),
+    })
+    const count = data.contacts?.length ?? 0
+    total += count
+    if (count < limit || !data.paging?.next) break
+    offset += limit
+  }
+
+  return total
+}
+
 export async function omnisendFindOrCreateContact(email: string): Promise<OmnisendContactResult> {
   const search = await omnisendGet<{ contacts: OmnisendContactResult[] }>('/contacts', { email })
   const existing = search.contacts?.[0]
