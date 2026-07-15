@@ -8,7 +8,7 @@ import {
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import { STALLED_DAYS, daysSince, isStalled, isSoldOutLive, getStalledUnitsSummary } from '@/lib/product-metrics'
-import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry } from '@/types'
+import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled'
 type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status'
@@ -680,6 +680,120 @@ function StalledCampaignPanel({
   )
 }
 
+// Restock-signup panel — shown whenever a product has at least one sold-out variant
+// (independent of the product-level soldOut/isSoldOutLive flag, which sums across
+// variants and can miss a single sold-out size/color). Local state per instance, same
+// confirm-box pattern as StalledCampaignPanel above.
+function RestockSignupPanel({
+  product,
+  data,
+  loading,
+  error,
+  onCreateSegment,
+}: {
+  product: ProductSummary
+  data: BackInStockResponse | null
+  loading: boolean
+  error: string | null
+  onCreateSegment: (product: ProductSummary) => Promise<{ ok: boolean; message: string }>
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  const variantsWithSignups = (data?.variants ?? []).filter((v) => v.signups.length > 0)
+  const uniqueEmails = new Set(variantsWithSignups.flatMap((v) => v.signups.map((s) => s.email))).size
+
+  async function handleCreate() {
+    setCreating(true)
+    setResult(null)
+    const outcome = await onCreateSegment(product)
+    setResult(outcome)
+    if (outcome.ok) setConfirming(false)
+    setCreating(false)
+  }
+
+  return (
+    <div className="bg-sand-50 rounded-xl p-4 mt-2">
+      <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">Restock Signups</p>
+
+      {loading ? (
+        <p className="text-sm text-charcoal-400 mb-4">Loading signups…</p>
+      ) : error ? (
+        <p className="text-sm text-red-600 mb-4">{error}</p>
+      ) : variantsWithSignups.length === 0 ? (
+        <p className="text-sm text-charcoal-400 italic">No one has signed up for a restock alert on this product yet.</p>
+      ) : (
+        <>
+          <ul className="space-y-3 mb-5">
+            {variantsWithSignups.map((v) => (
+              <li key={v.variantId}>
+                <p className="text-sm text-charcoal-700 font-medium mb-1">
+                  {v.variantTitle ?? `Variant #${v.variantId}`}
+                  <span className="text-charcoal-400 font-normal"> · {v.signups.length} signup{v.signups.length === 1 ? '' : 's'}</span>
+                  {v.inventoryQuantity != null && v.inventoryQuantity > 0 && (
+                    <span className="text-[10px] text-olive-600 font-normal"> · back in stock ({v.inventoryQuantity} on hand)</span>
+                  )}
+                </p>
+                <ul className="flex flex-wrap gap-1.5">
+                  {v.signups.map((s) => (
+                    <li
+                      key={`${v.variantId}-${s.email}`}
+                      className="text-xs px-2 py-1 rounded-full bg-white border border-sand-200 text-charcoal-600"
+                    >
+                      {s.email}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+
+          {confirming ? (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+              <p className="text-sm text-charcoal-700 mb-3">
+                This will create a segment in Omnisend named <strong>Restock: {product.title}</strong>, adding/tagging{' '}
+                <strong>{uniqueEmails}</strong> contact{uniqueEmails === 1 ? '' : 's'} who asked to be notified. Anyone not
+                already an Omnisend contact will be added as a subscribed contact.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleCreate}
+                  disabled={creating}
+                  className="flex items-center gap-2 text-sm font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-4 py-2 rounded-lg transition-colors disabled:opacity-60"
+                >
+                  {creating && <Loader2 size={14} className="animate-spin" />}
+                  Confirm & Create
+                </button>
+                <button
+                  onClick={() => setConfirming(false)}
+                  disabled={creating}
+                  className="text-sm text-charcoal-400 hover:text-charcoal-600 px-4 py-2"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirming(true)}
+              className="flex items-center gap-2 text-sm font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-4 py-2 rounded-lg transition-colors"
+            >
+              <Users size={14} /> Create Segment for {uniqueEmails} contact{uniqueEmails === 1 ? '' : 's'}
+            </button>
+          )}
+
+          {result && (
+            <p className={`flex items-center gap-2 text-sm mt-3 ${result.ok ? 'text-olive-600' : 'text-red-600'}`}>
+              {result.message}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function ProductRow({
   row,
   index,
@@ -706,6 +820,12 @@ function ProductRow({
   recomputingRelated,
   relatedComputedAt,
   onCreateSegment,
+  restockExpanded,
+  onToggleRestockExpand,
+  restockData,
+  restockLoading,
+  restockError,
+  onCreateRestockSegment,
 }: {
   row: ResolvedRow
   index: number
@@ -732,6 +852,12 @@ function ProductRow({
   recomputingRelated: boolean
   relatedComputedAt: string | null
   onCreateSegment: (product: ProductSummary, emails: string[]) => Promise<{ ok: boolean; message: string }>
+  restockExpanded: boolean
+  onToggleRestockExpand: () => void
+  restockData: BackInStockResponse | null
+  restockLoading: boolean
+  restockError: string | null
+  onCreateRestockSegment: (product: ProductSummary) => Promise<{ ok: boolean; message: string }>
 }) {
   const { product: p, badge, isSoldOutLive: soldOut } = row
   function money(n: number) { return fmt(n, currency, locale) }
@@ -748,6 +874,11 @@ function ProductRow({
               <div className="flex items-center gap-1.5 flex-wrap mt-1">
                 <CategoryEditor title={p.title} assignedCategory={row.category} onAssign={onAssignCategory} />
                 <StatusBadgePill badge={badge} />
+                {p.hasSoldOutVariant && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap bg-red-50 text-red-600 border-red-200">
+                    Variant sold out
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-1.5 mt-1">
                 <span className="text-[10px] text-charcoal-300 uppercase tracking-wide">Cost:</span>
@@ -823,6 +954,16 @@ function ProductRow({
                 <ChevronDown size={11} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
               </button>
             )}
+            {p.hasSoldOutVariant && (
+              <button
+                onClick={onToggleRestockExpand}
+                className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-colors
+                  ${restockExpanded ? 'border-terracotta-400 text-terracotta-600 bg-terracotta-100/40' : 'border-sand-300 text-charcoal-600 hover:border-terracotta-300 hover:text-terracotta-600'}`}
+              >
+                <Mail size={11} /> Restock signups
+                <ChevronDown size={11} className={`transition-transform ${restockExpanded ? 'rotate-180' : ''}`} />
+              </button>
+            )}
           </div>
           {hideError && <p className="text-[10px] text-red-500 mt-1">{hideError}</p>}
         </td>
@@ -844,6 +985,19 @@ function ProductRow({
               recomputingRelated={recomputingRelated}
               relatedComputedAt={relatedComputedAt}
               onCreateSegment={onCreateSegment}
+            />
+          </td>
+        </tr>
+      )}
+      {p.hasSoldOutVariant && restockExpanded && (
+        <tr>
+          <td colSpan={4} className="pb-3">
+            <RestockSignupPanel
+              product={p}
+              data={restockData}
+              loading={restockLoading}
+              error={restockError}
+              onCreateSegment={onCreateRestockSegment}
             />
           </td>
         </tr>
@@ -915,6 +1069,13 @@ export default function ProductsInventory({
   const [interestedCache, setInterestedCache] = useState<Record<number, InterestedCustomersResponse>>({})
   const [interestedLoadingIds, setInterestedLoadingIds] = useState<Set<number>>(new Set())
   const [interestedErrors, setInterestedErrors] = useState<Record<number, string>>({})
+
+  // Restock (back-in-stock) signups — separate expand toggle from the campaign panel above,
+  // since a product can have a sold-out variant independent of soldOut/isSoldOutLive.
+  const [restockExpandedRows, setRestockExpandedRows] = useState<Set<number>>(new Set())
+  const [restockCache, setRestockCache] = useState<Record<number, BackInStockResponse>>({})
+  const [restockLoadingIds, setRestockLoadingIds] = useState<Set<number>>(new Set())
+  const [restockErrors, setRestockErrors] = useState<Record<number, string>>({})
 
   async function load() {
     setLoading(true)
@@ -1104,6 +1265,35 @@ export default function ProductsInventory({
     })
   }
 
+  async function loadRestock(productId: number) {
+    setRestockLoadingIds((prev) => new Set(prev).add(productId))
+    setRestockErrors((prev) => { const next = { ...prev }; delete next[productId]; return next })
+    try {
+      const res = await fetch(`/api/shopify/products/${productId}/back-in-stock`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setRestockCache((prev) => ({ ...prev, [productId]: data }))
+    } catch (e) {
+      setRestockErrors((prev) => ({ ...prev, [productId]: e instanceof Error ? e.message : 'Failed to load signups' }))
+    } finally {
+      setRestockLoadingIds((prev) => { const next = new Set(prev); next.delete(productId); return next })
+    }
+  }
+
+  function toggleRestockExpand(productId: number | null) {
+    if (productId == null) return
+    setRestockExpandedRows((prev) => {
+      const next = new Set(prev)
+      if (next.has(productId)) {
+        next.delete(productId)
+      } else {
+        next.add(productId)
+        if (!restockCache[productId]) loadRestock(productId)
+      }
+      return next
+    })
+  }
+
   async function recomputeRelated() {
     setRecomputingRelated(true)
     try {
@@ -1141,6 +1331,29 @@ export default function ProductsInventory({
         message: data.alreadyExisted
           ? `Segment already existed in Omnisend — tagged ${data.tagged} customer${data.tagged === 1 ? '' : 's'}`
           : `Segment created in Omnisend — tagged ${data.tagged} customer${data.tagged === 1 ? '' : 's'}`,
+      }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : 'Failed to create segment' }
+    }
+  }
+
+  async function handleCreateRestockSegment(product: ProductSummary): Promise<{ ok: boolean; message: string }> {
+    if (product.productId == null) {
+      return { ok: false, message: 'Missing product id.' }
+    }
+    try {
+      const res = await fetch(`/api/shopify/products/${product.productId}/back-in-stock-segment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productTitle: product.title }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      return {
+        ok: true,
+        message: data.alreadyExisted
+          ? `Segment already existed in Omnisend — tagged ${data.tagged} contact${data.tagged === 1 ? '' : 's'}`
+          : `Segment created in Omnisend — tagged ${data.tagged} contact${data.tagged === 1 ? '' : 's'}`,
       }
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : 'Failed to create segment' }
@@ -1397,6 +1610,10 @@ export default function ProductsInventory({
                       const interestedData = pid != null ? interestedCache[pid] ?? null : null
                       const interestedLoading = pid != null && interestedLoadingIds.has(pid)
                       const interestedError = pid != null ? interestedErrors[pid] ?? null : null
+                      const restockExpanded = pid != null && restockExpandedRows.has(pid)
+                      const restockData = pid != null ? restockCache[pid] ?? null : null
+                      const restockLoading = pid != null && restockLoadingIds.has(pid)
+                      const restockError = pid != null ? restockErrors[pid] ?? null : null
                       return (
                         <ProductRow
                           key={p.title}
@@ -1425,6 +1642,12 @@ export default function ProductsInventory({
                           recomputingRelated={recomputingRelated}
                           relatedComputedAt={relatedData?.computedAt ?? null}
                           onCreateSegment={handleCreateSegment}
+                          restockExpanded={restockExpanded}
+                          onToggleRestockExpand={() => toggleRestockExpand(pid)}
+                          restockData={restockData}
+                          restockLoading={restockLoading}
+                          restockError={restockError}
+                          onCreateRestockSegment={handleCreateRestockSegment}
                         />
                       )
                     })}

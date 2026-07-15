@@ -4,7 +4,9 @@ import { NextRequest, NextResponse } from 'next/server'
 const SESSION_COOKIE = 'lela_session'
 
 // Paths that don't require an active session
-const PUBLIC_PREFIXES = ['/api/auth', '/api/ms/auth', '/install', '/_next', '/favicon.ico']
+// /api/public is called cross-origin, unauthenticated, by the storefront theme (see
+// src/app/api/public/back-in-stock/route.ts) — it must stay open to anonymous visitors.
+const PUBLIC_PREFIXES = ['/api/auth', '/api/ms/auth', '/api/public', '/install', '/_next', '/favicon.ico']
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl

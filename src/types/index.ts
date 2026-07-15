@@ -273,10 +273,35 @@ export interface ProductSummary {
   lastSoldAt: string | null       // most recent order date seen for this title, null if never sold
   cogs: number | null             // manually entered cost, from data/product-cogs.json, keyed by product id
   nativeCogs: number | null       // Shopify's "Cost per item" (InventoryItem.cost), first variant
+  hasSoldOutVariant: boolean      // true if any single variant is at 0 — distinct from inventoryQuantity, which sums across variants
+}
+
+// ─── Back in Stock signups ──────────────────────────────────────────────────
+
+export interface BackInStockSignup {
+  email: string
+  variantId: number
+  variantTitle: string | null
+  createdAt: string
+}
+
+export type BackInStockStore = Record<string, BackInStockSignup[]> // keyed by product id (string)
+
+export interface BackInStockVariantStatus {
+  variantId: number
+  variantTitle: string | null
+  inventoryQuantity: number | null
+  signups: BackInStockSignup[]
+}
+
+export interface BackInStockResponse {
+  productId: string
+  variants: BackInStockVariantStatus[]
 }
 
 export interface ShopifyProductVariant {
   id: number
+  title: string
   price: string
   inventory_quantity: number | null
   sku: string

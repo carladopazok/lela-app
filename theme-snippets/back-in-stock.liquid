@@ -1,0 +1,91 @@
+{%- comment -%}
+  Back in Stock notify widget — reference only, not part of the Next.js build.
+
+  Setup:
+  1. Shopify admin → Online Store → Themes → Edit code → Snippets → Add a new snippet
+     → name it "back-in-stock" → paste this file's contents.
+  2. Render it from your product template (e.g. main-product.liquid), right after the
+     Add to Cart / variant picker block:
+       {% render 'back-in-stock', product: product, variant: current_variant %}
+  3. Replace DASHBOARD_URL below with the dashboard's deployed public URL
+     (e.g. https://lela-app.vercel.app — no trailing slash). That same URL's origin
+     also needs to be set as STOREFRONT_ORIGIN on the dashboard (see .env.local.example)
+     so the dashboard's CORS check allows this request through.
+{%- endcomment -%}
+
+{%- unless variant.available -%}
+  <div
+    class="back-in-stock"
+    data-product-id="{{ product.id }}"
+    data-variant-id="{{ variant.id }}"
+    data-variant-title="{{ variant.title | escape }}"
+  >
+    <p class="back-in-stock__label">This option is sold out.</p>
+    <form class="back-in-stock__form">
+      <input type="email" class="back-in-stock__email" placeholder="Your email" required>
+      <button type="submit" class="back-in-stock__submit">Notify me when back in stock</button>
+    </form>
+    <p class="back-in-stock__message" hidden></p>
+  </div>
+
+  <style>
+    .back-in-stock { margin: 1rem 0; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
+    .back-in-stock__label { margin: 0 0 0.5rem; font-size: 0.9rem; }
+    .back-in-stock__form { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .back-in-stock__email { flex: 1; min-width: 180px; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; }
+    .back-in-stock__submit { padding: 0.5rem 1rem; border: none; border-radius: 4px; background: #000; color: #fff; cursor: pointer; }
+    .back-in-stock__submit:disabled { opacity: 0.6; cursor: not-allowed; }
+    .back-in-stock__message { margin-top: 0.5rem; font-size: 0.85rem; }
+  </style>
+
+  <script>
+    (function () {
+      var DASHBOARD_URL = 'https://REPLACE-WITH-YOUR-DEPLOYED-DASHBOARD-URL';
+
+      document.querySelectorAll('.back-in-stock').forEach(function (widget) {
+        var form = widget.querySelector('.back-in-stock__form');
+        var emailInput = widget.querySelector('.back-in-stock__email');
+        var submitBtn = widget.querySelector('.back-in-stock__submit');
+        var message = widget.querySelector('.back-in-stock__message');
+
+        form.addEventListener('submit', function (e) {
+          e.preventDefault();
+          submitBtn.disabled = true;
+          message.hidden = true;
+
+          fetch(DASHBOARD_URL + '/api/public/back-in-stock', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              productId: widget.dataset.productId,
+              variantId: widget.dataset.variantId,
+              variantTitle: widget.dataset.variantTitle,
+              email: emailInput.value,
+            }),
+          })
+            .then(function (res) {
+              return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+            })
+            .then(function (result) {
+              message.hidden = false;
+              if (result.ok) {
+                message.textContent = "You're on the list — we'll email you when it's back.";
+                message.style.color = '#2a6f2a';
+                form.hidden = true;
+              } else {
+                message.textContent = (result.data && result.data.error) || 'Something went wrong — please try again.';
+                message.style.color = '#b00020';
+                submitBtn.disabled = false;
+              }
+            })
+            .catch(function () {
+              message.hidden = false;
+              message.textContent = 'Something went wrong — please try again.';
+              message.style.color = '#b00020';
+              submitBtn.disabled = false;
+            });
+        });
+      });
+    })();
+  </script>
+{%- endunless -%}

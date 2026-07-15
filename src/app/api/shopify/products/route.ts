@@ -138,6 +138,9 @@ export async function GET(req: NextRequest) {
           if (v.inventory_quantity == null) return sum
           return (sum ?? 0) + v.inventory_quantity
         }, null)
+        // Distinct from inventoryQuantity (a sum): a multi-variant product can have one
+        // sold-out size/color while the sum across all variants is still > 0.
+        const hasSoldOutVariant = (p.variants ?? []).some((v) => v.inventory_quantity === 0)
         const firstVariant = p.variants?.[0]
         const manualCogsEntry = productCogsMap[String(p.id)]
         return {
@@ -160,6 +163,7 @@ export async function GET(req: NextRequest) {
           lastSoldAt: sales?.lastSoldAt ?? null,
           cogs: manualCogsEntry?.manualCogs ?? null,
           nativeCogs: firstVariant?.inventory_item_id != null ? inventoryItemCosts.get(firstVariant.inventory_item_id) ?? null : null,
+          hasSoldOutVariant,
         }
       })
     } catch (err) {
@@ -185,6 +189,7 @@ export async function GET(req: NextRequest) {
         lastSoldAt: sales.lastSoldAt,
         cogs: null,
         nativeCogs: null,
+        hasSoldOutVariant: false,
       }))
     }
 
