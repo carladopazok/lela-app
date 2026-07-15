@@ -8,7 +8,6 @@ import SalesOverview from '@/components/sections/SalesOverview'
 import ProductsInventory from '@/components/sections/ProductsInventory'
 import EmailPerformance from '@/components/sections/EmailPerformance'
 import CustomerIntelligence from '@/components/sections/CustomerIntelligence'
-import CustomerJourney from '@/components/sections/CustomerJourney'
 import CustomerService from '@/components/sections/CustomerService'
 import Forecast from '@/components/sections/Forecast'
 import AboutTool from '@/components/sections/AboutTool'
@@ -103,7 +102,6 @@ export default function Home() {
                 onNavigateToProduct={goToProduct}
               />
             )}
-            {active === 'customer-journey' && <CustomerJourney />}
             {active === 'customer-service' && (
               <CustomerService
                 openTicketId={openTicketId}

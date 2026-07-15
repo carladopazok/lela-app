@@ -117,10 +117,10 @@ export async function GET(req: NextRequest) {
       const customerAbandonedCheckouts = abandonedCheckoutsMap.get(c.id) ?? []
 
       const computedTags = computeTags({
-        totalSpent,
         ordersCount: c.orders_count,
         lastOrderDate,
-        abandonedCheckoutsCount: customerAbandonedCheckouts.length,
+        emailMarketingConsentState: c.email_marketing_consent?.state,
+        abandonedCheckouts: customerAbandonedCheckouts,
       })
 
       return {

@@ -45,9 +45,13 @@ const COUNTRY_STYLE = { bg: 'bg-teal-50', text: 'text-teal-700', border: 'border
 
 const TAG_STYLES: Record<string, { bg: string; text: string; border: string }> = {
   VIP:               { bg: 'bg-green-50',      text: 'text-green-700',      border: 'border-green-400' },
+  loyal:             { bg: 'bg-teal-50',       text: 'text-teal-700',       border: 'border-teal-400' },
   '1-order':         { bg: 'bg-charcoal-100',  text: 'text-charcoal-900',   border: 'border-charcoal-500' },
   'never-purchased': { bg: 'bg-sand-100',      text: 'text-charcoal-600',   border: 'border-sand-400' },
   winback:           { bg: 'bg-orange-50',     text: 'text-orange-700',     border: 'border-orange-400' },
+  'at-risk':         { bg: 'bg-amber-50',      text: 'text-amber-700',      border: 'border-amber-400' },
+  lapsed:            { bg: 'bg-red-50',        text: 'text-red-600',        border: 'border-red-400' },
+  lost:              { bg: 'bg-sand-100',      text: 'text-charcoal-700',   border: 'border-charcoal-400' },
   'abandoned-checkout': { bg: 'bg-red-50',     text: 'text-red-600',        border: 'border-red-400' },
 }
 const CUSTOM_TAG_STYLE = { bg: 'bg-violet-50', text: 'text-violet-700', border: 'border-violet-400' }

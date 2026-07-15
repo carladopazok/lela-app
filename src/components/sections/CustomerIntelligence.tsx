@@ -12,8 +12,10 @@ import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import CollapsibleCard from '@/components/ui/CollapsibleCard'
 import RFMAnalysis from '@/components/sections/RFMAnalysis'
 import Segments from '@/components/sections/Segments'
+import CustomerJourney from '@/components/sections/CustomerJourney'
 import { computeRFM, SEGMENT_META } from '@/lib/rfm'
 import type { RFMSegment } from '@/lib/rfm'
+import { VIP_MIN_ORDERS, AT_RISK_START_DAYS, LAPSED_START_DAYS, LOST_DAYS, ABANDONED_CHECKOUT_WINDOW_DAYS } from '@/lib/segmentation'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import type { EnrichedCustomer, ShopifyOrder, CSTicket, RelatedProductsData } from '@/types'
 import { CUSTOMER_TAGS } from '@/types'
@@ -627,7 +629,7 @@ export default function CustomerIntelligence({
   const [syncedIds, setSyncedIds] = useState<Set<number>>(new Set())
   const [bulkSyncing, setBulkSyncing] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
-  const [activeView, setActiveView] = useState<'customers' | 'rfm' | 'segments'>('customers')
+  const [activeView, setActiveView] = useState<'customers' | 'rfm' | 'segments' | 'journey'>('customers')
   const [taggingLogicOpen, setTaggingLogicOpen] = useState(false)
   const [addingTagFor, setAddingTagFor] = useState<number | null>(null)
   const [addTagValue, setAddTagValue] = useState('')
@@ -867,7 +869,7 @@ export default function CustomerIntelligence({
   const taggedCount = customers.filter((c) => c.computedTags.length > 0 || c.manualTags.length > 0 || c.productTags.length > 0).length
 
   return (
-    <section className="max-w-4xl">
+    <section className={activeView === 'journey' ? 'max-w-full' : 'max-w-4xl'}>
       <div className="flex items-start justify-between mb-6">
         <div>
           <h2 className="font-serif text-3xl text-charcoal-700 tracking-tight">Customer Intelligence</h2>
@@ -876,7 +878,9 @@ export default function CustomerIntelligence({
               ? 'Click any customer to see their full profile'
               : activeView === 'rfm'
               ? 'RFM — Recency · Frequency · Monetary scoring'
-              : 'Segments by product purchased, cohort, and customer tag'}
+              : activeView === 'segments'
+              ? 'Segments by product purchased, cohort, and customer tag'
+              : 'Lifecycle stages and the automations that should fire at each one'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -902,14 +906,14 @@ export default function CustomerIntelligence({
 
       {/* Tab bar */}
       <div className="flex gap-1 mb-6 bg-sand-100 p-1 rounded-xl w-fit">
-        {(['customers', 'rfm', 'segments'] as const).map((view) => (
+        {(['customers', 'rfm', 'segments', 'journey'] as const).map((view) => (
           <button
             key={view}
             onClick={() => setActiveView(view)}
             className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all capitalize
               ${activeView === view ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
           >
-            {view === 'rfm' ? 'RFM Analysis' : view === 'segments' ? 'Segments' : 'Customers'}
+            {view === 'rfm' ? 'RFM Analysis' : view === 'segments' ? 'Segments' : view === 'journey' ? 'Journey' : 'Customers'}
           </button>
         ))}
       </div>
@@ -929,6 +933,10 @@ export default function CustomerIntelligence({
         <Segments customers={customers} customTagTypes={customTagTypes} />
       )}
 
+      {!loading && !error && activeView === 'journey' && (
+        <CustomerJourney customers={customers} />
+      )}
+
       {!loading && !error && activeView === 'customers' && (
         <>
           {/* Tag logic legend */}
@@ -939,11 +947,15 @@ export default function CustomerIntelligence({
               onToggle={() => setTaggingLogicOpen((v) => !v)}
             >
               <div className="grid grid-cols-2 gap-3 text-sm text-charcoal-500">
-                <div className="flex items-start gap-2"><TagBadge tag="VIP" /><span>At least 2 orders</span></div>
-                <div className="flex items-start gap-2"><TagBadge tag="1-order" /><span>Purchased exactly once</span></div>
                 <div className="flex items-start gap-2"><TagBadge tag="never-purchased" /><span>0 orders</span></div>
-                <div className="flex items-start gap-2"><TagBadge tag="winback" /><span>1 order in last 365 days, no return</span></div>
-                <div className="flex items-start gap-2"><TagBadge tag="abandoned-checkout" /><span>Has an open abandoned checkout</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="1-order" /><span>Exactly 1 order, within {AT_RISK_START_DAYS} days</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="winback" /><span>Exactly 1 order, {AT_RISK_START_DAYS}–{LAPSED_START_DAYS - 1} days since it</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="loyal" /><span>2–{VIP_MIN_ORDERS - 1} orders, most recent within {AT_RISK_START_DAYS} days</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="VIP" /><span>{VIP_MIN_ORDERS}+ orders, most recent within {LOST_DAYS} days</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="at-risk" /><span>2+ orders (below VIP), {AT_RISK_START_DAYS}–{LAPSED_START_DAYS - 1} days since last order</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="lapsed" /><span>{LAPSED_START_DAYS}–{LOST_DAYS - 1} days since last order</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="lost" /><span>{LOST_DAYS}+ days since last order, or unsubscribed</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="abandoned-checkout" /><span>Open checkout within the last {ABANDONED_CHECKOUT_WINDOW_DAYS} days (independent of the tags above)</span></div>
               </div>
             </CollapsibleCard>
           </div>

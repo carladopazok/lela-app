@@ -127,7 +127,7 @@ export interface OmnisendContact {
 
 // ─── App-level ──────────────────────────────────────────────────────────────
 
-export const CUSTOMER_TAGS = ['VIP', '1-order', 'never-purchased', 'winback', 'abandoned-checkout'] as const
+export const CUSTOMER_TAGS = ['VIP', 'loyal', '1-order', 'winback', 'at-risk', 'lapsed', 'lost', 'never-purchased', 'abandoned-checkout'] as const
 export type CustomerTag = string
 
 export interface EnrichedCustomer extends ShopifyCustomer {

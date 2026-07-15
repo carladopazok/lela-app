@@ -1,22 +1,36 @@
 import type { EnrichedCustomer } from '@/types'
-import { computeRFM, type ScoredCustomer } from './rfm'
+import {
+  classifyCustomerStage,
+  hasRecentAbandonedCheckout,
+  LIFECYCLE_STAGE_META,
+  STAGE_TRANSITION_RULES as LIFECYCLE_STAGE_TRANSITION_RULES,
+  type LifecycleStage,
+} from './segmentation'
 
-export type JourneyStage = 'Lead' | 'New' | 'Active' | 'Loyal' | 'VIP' | 'At Risk' | 'Lapsed' | 'Lost'
+// 'Pre-Purchase' and 'Lead' aren't LifecycleStage values — they're Journey-only
+// aggregate/funnel concepts (see computeJourneyCounts) that can't apply to a
+// Customers-tab row, since every row there is already a real Shopify customer.
+// Every other stage here is a LifecycleStage 1:1 — same classifier, same
+// thresholds, same source of truth as the Customers tab (src/lib/segmentation.ts).
+export type JourneyStage = 'Pre-Purchase' | 'Lead' | Exclude<LifecycleStage, 'Never Purchased'>
 
 export const JOURNEY_STAGE_ORDER: JourneyStage[] = [
-  'Lead', 'New', 'Active', 'Loyal', 'VIP', 'At Risk', 'Lapsed', 'Lost',
+  'Pre-Purchase', 'Lead', 'New', 'Winback', 'Loyal', 'VIP', 'At Risk', 'Lapsed', 'Lost',
 ]
 
 export const JOURNEY_STAGE_META: Record<JourneyStage, { bg: string; text: string; border: string }> = {
-  'Lead':     { bg: 'bg-sand-200',   text: 'text-charcoal-700', border: 'border-sand-300' },
-  'New':      { bg: 'bg-violet-100', text: 'text-violet-700',   border: 'border-violet-200' },
-  'Active':   { bg: 'bg-violet-100', text: 'text-violet-700',   border: 'border-violet-200' },
-  'Loyal':    { bg: 'bg-teal-100',   text: 'text-teal-700',     border: 'border-teal-200' },
-  'VIP':      { bg: 'bg-teal-100',   text: 'text-teal-700',     border: 'border-teal-200' },
-  'At Risk':  { bg: 'bg-amber-100',  text: 'text-amber-700',    border: 'border-amber-200' },
-  'Lapsed':   { bg: 'bg-red-100',    text: 'text-red-700',      border: 'border-red-200' },
-  'Lost':     { bg: 'bg-red-100',    text: 'text-red-700',      border: 'border-red-200' },
+  'Pre-Purchase': { bg: 'bg-indigo-100', text: 'text-indigo-700',   border: 'border-indigo-200' },
+  Lead:           { bg: 'bg-sand-200',   text: 'text-charcoal-700', border: 'border-sand-300' },
+  New:            LIFECYCLE_STAGE_META.New,
+  Winback:        LIFECYCLE_STAGE_META.Winback,
+  Loyal:          LIFECYCLE_STAGE_META.Loyal,
+  VIP:            LIFECYCLE_STAGE_META.VIP,
+  'At Risk':      LIFECYCLE_STAGE_META['At Risk'],
+  Lapsed:         LIFECYCLE_STAGE_META.Lapsed,
+  Lost:           LIFECYCLE_STAGE_META.Lost,
 }
+
+export type Channel = 'Email' | 'SMS' | 'Email + SMS'
 
 export interface JourneyAutomation {
   id: string
@@ -24,39 +38,58 @@ export interface JourneyAutomation {
   name: string
   description: string
   active: boolean
+  channel: Channel
+  priority?: boolean
+  performance?: { revenuePerRecipient: number } | null
 }
 
+// revenuePerRecipient below is a stub. Omnisend has no automations/flows-performance
+// endpoint wired into this app yet (src/lib/omnisend.ts only has /campaigns, /segments,
+// /contacts) and Klaviyo isn't part of Lela's stack at all — replace with a real query
+// once one of those exists. Flagged in the UI too (see the tooltip on AutomationCard's
+// performance line in CustomerJourney.tsx), not just here.
 export const JOURNEY_AUTOMATIONS: JourneyAutomation[] = [
-  { id: 'welcome-series',        stage: 'Lead',     name: 'Welcome series',         description: 'Multi-email intro sequence for new subscribers',            active: true },
-  { id: 'first-purchase-offer',  stage: 'Lead',     name: 'First purchase offer',    description: "Discount nudge for leads who haven't ordered yet",          active: true },
-  { id: 'referral-follow-up',    stage: 'Lead',     name: 'Referral follow-up',      description: 'Invites leads referred by existing customers to buy',       active: false },
-  { id: 'event-follow-up',       stage: 'Lead',     name: 'Event follow-up',         description: 'Follows up with leads captured at a pop-up or event',       active: false },
+  { id: 'cart-abandonment',      stage: 'Pre-Purchase', name: 'Cart Abandonment',       description: "Triggers when a customer adds to cart but doesn't complete checkout within a few hours", active: false, channel: 'Email' },
+  { id: 'browse-abandonment',    stage: 'Pre-Purchase', name: 'Browse Abandonment',     description: "Triggers when a customer views products/collections but doesn't add to cart within a session", active: false, channel: 'Email' },
 
-  { id: 'post-purchase',         stage: 'New',      name: 'Post-purchase',           description: 'Order confirmation and care info after a first purchase',   active: true },
-  { id: 'review-request',        stage: 'New',      name: 'Review request',          description: 'Asks new customers to review their first order',            active: true },
-  { id: 'second-purchase-nudge', stage: 'New',      name: 'Second purchase nudge',   description: 'Encourages a second order with a tailored recommendation',  active: false },
+  { id: 'welcome-series',        stage: 'Lead',     name: 'Welcome series',         description: 'Multi-email intro sequence for new subscribers',            active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.85 } },
+  { id: 'first-purchase-offer',  stage: 'Lead',     name: 'First purchase offer',    description: "Discount nudge for leads who haven't ordered yet",          active: true,  channel: 'Email', performance: { revenuePerRecipient: 2.40 } },
+  { id: 'referral-follow-up',    stage: 'Lead',     name: 'Referral follow-up',      description: 'Invites leads referred by existing customers to buy',       active: false, channel: 'Email' },
+  { id: 'event-follow-up',       stage: 'Lead',     name: 'Event follow-up',         description: 'Follows up with leads captured at a pop-up or event',       active: false, channel: 'Email' },
 
-  { id: 'cross-sell-campaign',   stage: 'Active',   name: 'Cross-sell campaign',     description: 'Recommends complementary products from past purchases',    active: true },
-  { id: 'anniversary-flow',      stage: 'Active',   name: 'Anniversary flow',        description: 'Marks the first-purchase anniversary with an offer',        active: true },
-  { id: 'vip-upgrade-prompt',    stage: 'Active',   name: 'VIP upgrade prompt',      description: 'Highlights VIP perks to push toward the next tier',         active: false },
+  { id: 'post-purchase',         stage: 'New',      name: 'Post-purchase',           description: 'Order confirmation and care info after a first purchase',   active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.20 } },
+  { id: 'review-request',        stage: 'New',      name: 'Review request',          description: 'Asks new customers to review their first order',            active: true,  channel: 'Email', performance: { revenuePerRecipient: 0.65 } },
+  { id: 'second-purchase-nudge', stage: 'New',      name: 'Second purchase nudge',   description: 'Encourages a second order with a tailored recommendation',  active: false, channel: 'Email' },
+  { id: 'back-in-stock-new',     stage: 'New',      name: 'Back-in-Stock Alert',     description: 'Notifies a customer when a product they wanted is restocked', active: false, channel: 'Email' },
+  { id: 'price-drop-new',        stage: 'New',      name: 'Price Drop Alert',        description: 'Notifies a customer when a product they viewed drops in price', active: false, channel: 'Email' },
+  { id: 'post-purchase-education', stage: 'New',    name: 'Post-Purchase Education', description: 'How-to-wear / care instructions, separate from the review request', active: false, channel: 'Email' },
 
-  { id: 'community-invite',      stage: 'Loyal',    name: 'Community invite',        description: 'Invites loyal customers into a community/loyalty programme', active: true },
-  { id: 'referral-program',      stage: 'Loyal',    name: 'Referral program',        description: 'Rewards loyal customers for referring friends',             active: false },
-  { id: 'new-launch-preview',    stage: 'Loyal',    name: 'New launch preview',      description: 'Early visibility into upcoming launches',                   active: false },
+  { id: 'winback-day-60',        stage: 'Winback',  name: 'Winback day 60',          description: 'First win-back email, sent 60 days after a customer’s only order', active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.95 } },
+  { id: 'winback-day-75',        stage: 'Winback',  name: 'Winback day 75',          description: 'Follow-up win-back with a stronger incentive at day 75',    active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.35 } },
 
-  { id: 'early-access',          stage: 'VIP',      name: 'Early access',            description: 'Early access to new drops and sales',                       active: true },
-  { id: 'personal-thank-you',    stage: 'VIP',      name: 'Personal thank you',      description: 'Personal thank-you note/gift for top spenders',             active: false },
-  { id: 'ambassador-invite',     stage: 'VIP',      name: 'Ambassador invite',       description: 'Invites VIPs into an ambassador/affiliate programme',       active: false },
+  { id: 'cross-sell-campaign',   stage: 'Loyal',    name: 'Cross-sell campaign',     description: 'Recommends complementary products from past purchases',    active: true,  channel: 'Email', performance: { revenuePerRecipient: 3.10 } },
+  { id: 'anniversary-flow',      stage: 'Loyal',    name: 'Anniversary flow',        description: 'Marks the first-purchase anniversary with an offer',        active: true,  channel: 'Email', performance: { revenuePerRecipient: 2.75 } },
+  { id: 'vip-upgrade-prompt',    stage: 'Loyal',    name: 'VIP upgrade prompt',      description: 'Highlights VIP perks to push toward the next tier',         active: false, channel: 'Email' },
+  { id: 'back-in-stock-loyal',   stage: 'Loyal',    name: 'Back-in-Stock Alert',     description: 'Notifies a customer when a product they wanted is restocked', active: false, channel: 'Email' },
+  { id: 'price-drop-loyal',      stage: 'Loyal',    name: 'Price Drop Alert',        description: 'Notifies a customer when a product they viewed drops in price', active: false, channel: 'Email' },
+  { id: 'community-invite',      stage: 'Loyal',    name: 'Community invite',        description: 'Invites loyal customers into a community/loyalty programme', active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.40 } },
+  { id: 'referral-program',      stage: 'Loyal',    name: 'Referral program',        description: 'Rewards loyal customers for referring friends',             active: false, channel: 'Email' },
+  { id: 'new-launch-preview',    stage: 'Loyal',    name: 'New launch preview',      description: 'Early visibility into upcoming launches',                   active: false, channel: 'Email' },
+  { id: 'replenishment-loyal',   stage: 'Loyal',    name: 'Replenishment Reminder',  description: 'Reminds loyal customers to reorder consumable products, where applicable', active: false, channel: 'Email' },
 
-  { id: 'winback-day-60',        stage: 'At Risk',  name: 'Winback day 60',          description: 'First win-back email, sent 60 days after last order',       active: true },
-  { id: 'winback-day-75',        stage: 'At Risk',  name: 'Winback day 75',          description: 'Follow-up win-back with a stronger incentive at day 75',    active: true },
-  { id: 'last-chance-day-90',    stage: 'At Risk',  name: 'Last chance day 90',      description: 'Final win-back attempt with a steep discount at day 90',    active: false },
+  { id: 'early-access',          stage: 'VIP',      name: 'Early access',            description: 'Early access to new drops and sales',                       active: true,  channel: 'Email', performance: { revenuePerRecipient: 4.20 } },
+  { id: 'personal-thank-you',    stage: 'VIP',      name: 'Personal thank you',      description: 'Personal thank-you note/gift for top spenders',             active: true,  channel: 'Email', priority: true, performance: { revenuePerRecipient: 3.60 } },
+  { id: 'ambassador-invite',     stage: 'VIP',      name: 'Ambassador invite',       description: 'Invites VIPs into an ambassador/affiliate programme',       active: true,  channel: 'Email', priority: true, performance: { revenuePerRecipient: 2.90 } },
+  { id: 'replenishment-vip',     stage: 'VIP',      name: 'Replenishment Reminder',  description: 'Reminds VIP customers to reorder consumable products, where applicable', active: false, channel: 'Email' },
 
-  { id: 'reactivation-sequence', stage: 'Lapsed',   name: 'Reactivation sequence',   description: 'Multi-touch sequence to bring lapsed customers back',       active: true },
-  { id: 'new-collection-alert',  stage: 'Lapsed',   name: 'New collection alert',    description: 'Notifies lapsed customers about a new collection',          active: false },
+  { id: 're-engagement-nudge',   stage: 'At Risk',  name: 'Re-engagement Nudge',     description: 'Light-touch check-in for repeat customers whose pace has slowed, before they lapse', active: false, channel: 'Email' },
+  { id: 'last-chance-day-90',    stage: 'Lapsed',   name: 'Last chance day 90',      description: 'Final win-back attempt with a steep discount at day 90',    active: false, channel: 'Email' },
 
-  { id: 'final-offer',           stage: 'Lost',     name: 'Final offer',             description: 'Last-ditch discount before pausing active marketing',       active: false },
-  { id: 'sunset-flow',           stage: 'Lost',     name: 'Sunset flow',             description: 'Reduces frequency and eventually sunsets inactive contacts', active: true },
+  { id: 'reactivation-sequence', stage: 'Lapsed',   name: 'Reactivation sequence',   description: 'Multi-touch sequence to bring lapsed customers back',       active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.10 } },
+  { id: 'new-collection-alert',  stage: 'Lapsed',   name: 'New collection alert',    description: 'Notifies lapsed customers about a new collection',          active: false, channel: 'Email' },
+
+  { id: 'final-offer',           stage: 'Lost',     name: 'Final offer',             description: 'Last-ditch discount before pausing active marketing',       active: false, channel: 'Email' },
+  { id: 'sunset-flow',           stage: 'Lost',     name: 'Sunset flow',             description: 'Reduces frequency and eventually sunsets inactive contacts', active: true,  channel: 'Email', performance: { revenuePerRecipient: 0.45 } },
 ]
 
 // Illustrative only — Lela doesn't track lead acquisition source, so this is
@@ -76,33 +109,36 @@ export const LEAD_SOURCE_BREAKDOWN: { source: string; pct: number }[] = [
 export const OMNISEND_AUTOMATIONS_URL = 'https://app.omnisend.com/#/automation'
 export const OMNISEND_CAMPAIGNS_URL = 'https://app.omnisend.com/#/campaigns/create'
 
-// Tunable thresholds for the lifecycle waterfall below — adjust here without
-// touching call sites.
-const LAPSED_DAYS = 180
-const LOST_DAYS = 365
-const AT_RISK_DAYS = 90
-const VIP_MIN_SPEND_QUINTILE = 4 // top two spend quintiles (4 or 5)
-
-function daysSinceLastOrder(c: EnrichedCustomer): number {
-  if (!c.lastOrderDate) return Infinity
-  return (Date.now() - new Date(c.lastOrderDate).getTime()) / 86_400_000
+// Plain-language transition rules — 'New' through 'Lost' are pulled directly from
+// the shared classifier (src/lib/segmentation.ts) so this copy can't drift out of
+// sync with the real thresholds; 'Pre-Purchase'/'Lead' get their own text since
+// they're Journey-only funnel concepts, not LifecycleStage values.
+export const STAGE_TRANSITION_RULES: Record<JourneyStage, string> = {
+  'Pre-Purchase': 'Added to cart or browsed, but no completed order yet',
+  Lead: 'Known Omnisend contact with zero completed Shopify orders',
+  New: LIFECYCLE_STAGE_TRANSITION_RULES.New,
+  Winback: LIFECYCLE_STAGE_TRANSITION_RULES.Winback,
+  Loyal: LIFECYCLE_STAGE_TRANSITION_RULES.Loyal,
+  VIP: LIFECYCLE_STAGE_TRANSITION_RULES.VIP,
+  'At Risk': LIFECYCLE_STAGE_TRANSITION_RULES['At Risk'],
+  Lapsed: LIFECYCLE_STAGE_TRANSITION_RULES.Lapsed,
+  Lost: LIFECYCLE_STAGE_TRANSITION_RULES.Lost,
 }
 
-// Classifies a customer who has purchased at least once, given their RFM score
-// (quintiles are only meaningful when computed across the full buyer pool —
-// see computeRFM — so this takes an already-scored customer rather than
-// re-deriving quintiles for a single record). 'Lead' isn't produced here —
-// see computeJourneyCounts, which derives it separately from the gap between
-// total Omnisend contacts and purchasing customers.
-export function classifyJourneyStage(scored: ScoredCustomer): Exclude<JourneyStage, 'Lead'> {
-  const days = daysSinceLastOrder(scored)
-  if (days > LOST_DAYS) return 'Lost'
-  if (days > LAPSED_DAYS) return 'Lapsed'
-  if (days > AT_RISK_DAYS) return 'At Risk'
-  if (scored.computedTags.includes('VIP') && scored.rfm.m >= VIP_MIN_SPEND_QUINTILE) return 'VIP'
-  if (scored.segment === 'Champions' || scored.segment === 'Loyal') return 'Loyal'
-  if (scored.orders_count >= 2) return 'Active'
-  return 'New'
+// Classifies a customer who has purchased at least once — callers pre-filter to
+// orders_count > 0 (see computeJourneyCounts/groupCustomersByStage below), so
+// classifyCustomerStage never actually returns 'Never Purchased' here, matching
+// this function's contract. 'Lead' and 'Pre-Purchase' aren't produced here — see
+// computeJourneyCounts, which derives Lead from the gap between total Omnisend
+// contacts and purchasing customers, and Pre-Purchase from real Shopify
+// abandoned-checkout data.
+export function classifyJourneyStage(customer: EnrichedCustomer): Exclude<JourneyStage, 'Lead' | 'Pre-Purchase'> {
+  const stage = classifyCustomerStage({
+    ordersCount: customer.orders_count,
+    lastOrderDate: customer.lastOrderDate ? new Date(customer.lastOrderDate) : null,
+    emailMarketingConsentState: customer.email_marketing_consent?.state,
+  })
+  return stage as Exclude<LifecycleStage, 'Never Purchased'>
 }
 
 export function computeJourneyCounts(
@@ -110,31 +146,33 @@ export function computeJourneyCounts(
   omnisendContactCount: number
 ): Record<JourneyStage, number> {
   const buyers = customers.filter((c) => c.orders_count > 0)
-  const scored = computeRFM(buyers) // ranks quintiles across the same buyer pool once, instead of per-customer
 
   const counts: Record<JourneyStage, number> = {
-    Lead: 0, New: 0, Active: 0, Loyal: 0, VIP: 0, 'At Risk': 0, Lapsed: 0, Lost: 0,
+    'Pre-Purchase': 0, Lead: 0, New: 0, Winback: 0, Loyal: 0, VIP: 0, 'At Risk': 0, Lapsed: 0, Lost: 0,
   }
 
-  for (const c of scored) counts[classifyJourneyStage(c)]++
+  for (const c of buyers) counts[classifyJourneyStage(c)]++
 
   // Approximation: doesn't match individual Omnisend contacts against Shopify
   // emails, just diffs the two totals. Unverified against a live account's
   // exact contact/customer overlap — iterate here if it reads oddly.
   counts.Lead = Math.max(0, omnisendContactCount - buyers.length)
 
+  // Real data, using the same 14-day recency window as the Abandoned Checkout tag
+  // (src/lib/segmentation.ts) — so this and the Customers-tab badge always agree.
+  counts['Pre-Purchase'] = customers.filter((c) => hasRecentAbandonedCheckout(c.abandonedCheckouts)).length
+
   return counts
 }
 
 // Groups customers who have purchased at least once by journey stage — used by
 // the "Create" flow to know which customers/emails belong to a given stage.
-export function groupCustomersByStage(customers: EnrichedCustomer[]): Record<Exclude<JourneyStage, 'Lead'>, EnrichedCustomer[]> {
+export function groupCustomersByStage(customers: EnrichedCustomer[]): Record<Exclude<JourneyStage, 'Lead' | 'Pre-Purchase'>, EnrichedCustomer[]> {
   const buyers = customers.filter((c) => c.orders_count > 0)
-  const scored = computeRFM(buyers)
 
-  const groups: Record<Exclude<JourneyStage, 'Lead'>, EnrichedCustomer[]> = {
-    New: [], Active: [], Loyal: [], VIP: [], 'At Risk': [], Lapsed: [], Lost: [],
+  const groups: Record<Exclude<JourneyStage, 'Lead' | 'Pre-Purchase'>, EnrichedCustomer[]> = {
+    New: [], Winback: [], Loyal: [], VIP: [], 'At Risk': [], Lapsed: [], Lost: [],
   }
-  for (const c of scored) groups[classifyJourneyStage(c)].push(c)
+  for (const c of buyers) groups[classifyJourneyStage(c)].push(c)
   return groups
 }

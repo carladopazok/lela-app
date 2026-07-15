@@ -1,31 +1,44 @@
 import type { CustomerTag } from '@/types'
+import {
+  classifyCustomerStage,
+  hasRecentAbandonedCheckout,
+  type LifecycleStage,
+  type AbandonedCheckoutLike,
+} from './segmentation'
 
 interface TaggingInput {
-  totalSpent: number
   ordersCount: number
   lastOrderDate: Date | null
-  abandonedCheckoutsCount: number
+  emailMarketingConsentState?: string | null
+  abandonedCheckouts: AbandonedCheckoutLike[]
 }
 
-const WINBACK_DAYS = 365
+// Tag strings kept identical to the ones already synced onto live Shopify/Omnisend
+// contacts under the old rules (never-purchased, VIP, winback, 1-order,
+// abandoned-checkout), so existing synced tags aren't orphaned. 'loyal', 'at-risk',
+// and 'lapsed'/'lost' are new — see src/lib/segmentation.ts for the thresholds.
+const STAGE_TO_TAG: Record<LifecycleStage, CustomerTag> = {
+  'Never Purchased': 'never-purchased',
+  New: '1-order',
+  Winback: 'winback',
+  Loyal: 'loyal',
+  VIP: 'VIP',
+  'At Risk': 'at-risk',
+  Lapsed: 'lapsed',
+  Lost: 'lost',
+}
 
+// Thin wrapper around the shared classifier (src/lib/segmentation.ts) — this file
+// used to compute its own independent, order-count-only rules; see that module's
+// changelog comment for exactly what changed and why.
 export function computeTags(input: TaggingInput): CustomerTag[] {
-  const tags: CustomerTag[] = []
-
-  if (input.ordersCount === 0) {
-    tags.push('never-purchased')
-  } else if (input.ordersCount === 1) {
-    tags.push('1-order')
-    if (input.lastOrderDate) {
-      const daysSince = (Date.now() - input.lastOrderDate.getTime()) / 86_400_000
-      if (daysSince <= WINBACK_DAYS) tags.push('winback')
-    }
-  } else {
-    tags.push('VIP')
-  }
-
-  if (input.abandonedCheckoutsCount > 0) tags.push('abandoned-checkout')
-
+  const stage = classifyCustomerStage({
+    ordersCount: input.ordersCount,
+    lastOrderDate: input.lastOrderDate,
+    emailMarketingConsentState: input.emailMarketingConsentState,
+  })
+  const tags: CustomerTag[] = [STAGE_TO_TAG[stage]]
+  if (hasRecentAbandonedCheckout(input.abandonedCheckouts)) tags.push('abandoned-checkout')
   return tags
 }
 

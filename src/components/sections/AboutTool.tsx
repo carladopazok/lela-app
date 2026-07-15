@@ -1,29 +1,35 @@
 import { ExternalLink } from 'lucide-react'
+import { VIP_MIN_ORDERS, AT_RISK_START_DAYS, LAPSED_START_DAYS, LOST_DAYS, ABANDONED_CHECKOUT_WINDOW_DAYS } from '@/lib/segmentation'
 
+// Pulled from src/lib/segmentation.ts, the single real source of truth behind both
+// the Customers tab and the Journey tab — this copy used to describe a different,
+// unwired rule set (AOV-based VIP, email-open-based "Email Ghost") that never
+// matched what the app actually computed. It's derived from the live constants now
+// so it can't drift out of sync again.
 const LOGIC_ITEMS = [
   {
     tag: 'VIP',
     color: 'bg-terracotta-100 text-terracotta-700',
-    logic: 'Average order value over $150',
-    why: "High-AOV customers signal product affinity and purchase confidence. They're candidates for early access, loyalty perks, and upsell sequences — not discount campaigns.",
+    logic: `${VIP_MIN_ORDERS}+ orders, most recent within ${LOST_DAYS} days`,
+    why: "Frequency, not spend, is the strongest repeat-purchase signal I have without a store-specific AOV benchmark to lean on. VIPs get a longer recency runway than everyone else before falling out of the tier — their buying cadence is naturally slower than a one-time shopper's.",
   },
   {
-    tag: 'Loyalist',
+    tag: 'Loyal',
     color: 'bg-olive-100 text-olive-600',
-    logic: '3 or more orders placed',
-    why: 'Repeat purchasers are your most profitable segment. They deserve acknowledgment — a personal thank-you flow, referral program access, or product feedback asks.',
+    logic: `2–${VIP_MIN_ORDERS - 1} orders, active within ${AT_RISK_START_DAYS} days`,
+    why: 'Repeat purchasers below the VIP bar are still your most profitable segment relative to acquisition cost. They deserve acknowledgment — a community invite, referral access, or an upgrade nudge toward VIP.',
   },
   {
-    tag: 'At Risk',
+    tag: 'At Risk / Winback',
     color: 'bg-amber-50 text-amber-700',
-    logic: 'No purchase in the past 90 days',
-    why: "Lifecycle marketing's highest-leverage opportunity. A win-back sequence (social proof, new arrivals, time-sensitive offer) sent at 90 days out-converts cold acquisition by 3–5x in my experience.",
+    logic: `${AT_RISK_START_DAYS}–${LAPSED_START_DAYS - 1} days since last order`,
+    why: "Lifecycle marketing's highest-leverage window. One-time buyers get a distinct 'Winback' tag instead of 'At Risk' here — a customer with exactly one order needs a different message than a repeat buyer who's slowed down.",
   },
   {
-    tag: 'Email Ghost',
-    color: 'bg-sand-100 text-charcoal-500',
-    logic: 'No email opens in 60 days',
-    why: "Deliverability depends on list hygiene. Ghosts need a re-permission flow or suppression — not more sends. Keeping them active tanks open rates and eventually inbox placement.",
+    tag: 'Abandoned Checkout',
+    color: 'bg-red-50 text-red-600',
+    logic: `Open checkout within the last ${ABANDONED_CHECKOUT_WINDOW_DAYS} days`,
+    why: "An independent flag, not a lifecycle stage — a VIP can show this too if they've got a live cart on something new. A checkout that's been sitting open for months isn't a hot lead anymore, so this expires instead of counting forever.",
   },
 ]
 

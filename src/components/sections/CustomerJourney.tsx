@@ -1,15 +1,17 @@
 'use client'
 
 import { useEffect, useMemo, useState, Fragment } from 'react'
-import { RefreshCw, AlertCircle, ChevronRight, ExternalLink, CheckCircle2, Loader2 } from 'lucide-react'
-import LoadingSpinner from '@/components/ui/LoadingSpinner'
+import {
+  ChevronRight, ExternalLink, CheckCircle2, Loader2, AlertCircle, ZoomIn, ZoomOut,
+  AlertTriangle, Info, Star, Mail, MessageSquare,
+} from 'lucide-react'
 import Modal from '@/components/ui/Modal'
-import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import {
   JOURNEY_STAGE_ORDER,
   JOURNEY_STAGE_META,
   JOURNEY_AUTOMATIONS,
   LEAD_SOURCE_BREAKDOWN,
+  STAGE_TRANSITION_RULES,
   OMNISEND_AUTOMATIONS_URL,
   OMNISEND_CAMPAIGNS_URL,
   computeJourneyCounts,
@@ -18,6 +20,33 @@ import {
   type JourneyAutomation,
 } from '@/lib/journey'
 import type { EnrichedCustomer } from '@/types'
+
+// Stages with a 0-count diagnostic — surfaces likely mis-configured segment triggers
+// rather than letting an empty column read as "nothing to see here".
+const DIAGNOSTIC_STAGES: JourneyStage[] = ['At Risk', 'Lapsed']
+
+// Pre-Purchase's two cards have genuinely different audiences within the same column
+// (unlike every other stage, where one bucket serves all its cards), so audience
+// resolution happens per-automation rather than a single stageAudiences[stage] lookup.
+function audienceForAutomation(
+  automation: JourneyAutomation,
+  customers: EnrichedCustomer[],
+  stageAudiences: Record<Exclude<JourneyStage, 'Pre-Purchase'>, EnrichedCustomer[]>
+): EnrichedCustomer[] {
+  if (automation.id === 'browse-abandonment') return [] // no session/pixel tracking in this app — honestly empty
+  if (automation.id === 'cart-abandonment') return customers.filter((c) => c.abandonedCheckouts.length > 0)
+  if (automation.stage === 'Pre-Purchase') return []
+  return stageAudiences[automation.stage] ?? []
+}
+
+function ChannelBadge({ channel }: { channel: JourneyAutomation['channel'] }) {
+  const Icon = channel === 'SMS' ? MessageSquare : Mail
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-cream-200 text-charcoal-600">
+      <Icon size={9} /> {channel}
+    </span>
+  )
+}
 
 interface CreateCampaignResult {
   tagged: number
@@ -33,7 +62,7 @@ function AutomationCard({
   onCreate: (automation: JourneyAutomation) => void
 }) {
   return (
-    <div className="bg-white rounded-2xl shadow-card p-4">
+    <div className={`bg-white rounded-2xl shadow-card p-4 ${automation.priority ? 'border-2 border-terracotta-300' : ''}`}>
       <div className="flex items-start justify-between gap-2 mb-1.5">
         <p className="font-medium text-sm text-charcoal-700">{automation.name}</p>
         <span
@@ -46,7 +75,23 @@ function AutomationCard({
           {automation.active ? 'Active' : 'Inactive'}
         </span>
       </div>
+      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+        {automation.priority && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-terracotta-100 text-terracotta-700">
+            <Star size={9} fill="currentColor" /> Priority
+          </span>
+        )}
+        <ChannelBadge channel={automation.channel} />
+      </div>
       <p className="text-xs text-charcoal-400 leading-relaxed mb-3">{automation.description}</p>
+      {automation.active && automation.performance && (
+        <p
+          className="text-[11px] text-charcoal-400 -mt-2 mb-3"
+          title="Placeholder — Omnisend flow-performance API not yet wired up"
+        >
+          ≈ €{automation.performance.revenuePerRecipient.toFixed(2)} / recipient
+        </p>
+      )}
       {automation.active ? (
         <a
           href={OMNISEND_AUTOMATIONS_URL}
@@ -136,6 +181,12 @@ function CreateAutomationModal({
             <strong>{consentedEmails.length}</strong> of {audience.length} customers in this stage are subscribed to email
             marketing.
           </p>
+          {automation.id === 'browse-abandonment' && (
+            <div className="flex items-center gap-2 text-sm text-charcoal-500 bg-sand-100 border border-sand-300 rounded-xl p-3 mb-4">
+              <AlertCircle size={14} className="flex-shrink-0" />
+              Lela has no browse/session tracking source yet, so this audience is always empty until one's wired up.
+            </div>
+          )}
           {errorMsg && (
             <div className="flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl p-3 mb-4">
               <AlertCircle size={14} /> {errorMsg}
@@ -163,36 +214,38 @@ function CreateAutomationModal({
   )
 }
 
-export default function CustomerJourney() {
-  const [customers, setCustomers] = useState<EnrichedCustomer[]>([])
-  const [contactCount, setContactCount] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [activeAutomation, setActiveAutomation] = useState<JourneyAutomation | null>(null)
-  const { includeDummy } = useDummyData()
+const ZOOM_MIN = 0.5
+const ZOOM_MAX = 1.5
+const ZOOM_STEP = 0.1
 
-  async function load() {
-    setLoading(true)
-    setError(null)
-    try {
-      const [customersRes, contactsRes] = await Promise.all([
-        fetch(withDummyParam('/api/shopify/customers', includeDummy)),
-        fetch('/api/omnisend/contacts-count'),
-      ])
-      const customersData = await customersRes.json()
-      const contactsData = await contactsRes.json()
-      if (!customersRes.ok) throw new Error(customersData.error)
-      setCustomers(customersData.customers)
-      // Contact count is best-effort — journey still renders on Shopify data alone if it fails.
-      setContactCount(contactsRes.ok ? contactsData.total : 0)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load')
-    } finally {
-      setLoading(false)
-    }
+export default function CustomerJourney({ customers }: { customers: EnrichedCustomer[] }) {
+  const [contactCount, setContactCount] = useState(0)
+  const [contactsLoading, setContactsLoading] = useState(true)
+  const [activeAutomation, setActiveAutomation] = useState<JourneyAutomation | null>(null)
+  const [zoom, setZoom] = useState(1)
+  const [expandedRules, setExpandedRules] = useState<Set<JourneyStage>>(new Set())
+
+  function zoomIn() { setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100)) }
+  function zoomOut() { setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100)) }
+
+  function toggleRule(stage: JourneyStage) {
+    setExpandedRules((prev) => {
+      const next = new Set(prev)
+      next.has(stage) ? next.delete(stage) : next.add(stage)
+      return next
+    })
   }
 
-  useEffect(() => { load() }, [includeDummy]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    let cancelled = false
+    setContactsLoading(true)
+    fetch('/api/omnisend/contacts-count')
+      .then((res) => (res.ok ? res.json() : { total: 0 }))
+      .then((data) => { if (!cancelled) setContactCount(data.total ?? 0) })
+      .catch(() => { if (!cancelled) setContactCount(0) })
+      .finally(() => { if (!cancelled) setContactsLoading(false) })
+    return () => { cancelled = true }
+  }, [])
 
   const counts = useMemo(() => computeJourneyCounts(customers, contactCount), [customers, contactCount])
 
@@ -202,78 +255,104 @@ export default function CustomerJourney() {
   // Lead count above (which also counts non-Shopify Omnisend contacts).
   const stageAudiences = useMemo(() => {
     const groups = groupCustomersByStage(customers)
-    return { Lead: customers.filter((c) => c.orders_count === 0), ...groups } as Record<JourneyStage, EnrichedCustomer[]>
+    return { Lead: customers.filter((c) => c.orders_count === 0), ...groups }
   }, [customers])
 
   return (
-    <section className="max-w-none">
-      <div className="flex items-start justify-between mb-8">
-        <div>
-          <h2 className="font-serif text-3xl text-charcoal-700 tracking-tight">Customer Journey</h2>
-          <p className="text-sm text-charcoal-400 mt-1.5">Lifecycle stages and the automations that should fire at each one</p>
-        </div>
+    <div>
+      <div className="flex items-center justify-end gap-1 mb-3">
         <button
-          onClick={load}
-          disabled={loading}
-          className="flex items-center gap-2 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-terracotta-100 disabled:opacity-50"
+          onClick={zoomOut}
+          disabled={zoom <= ZOOM_MIN}
+          aria-label="Zoom out"
+          className="p-1.5 rounded-lg border border-sand-300 text-charcoal-500 hover:bg-cream-100 hover:text-terracotta-600 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
         >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          Refresh
+          <ZoomOut size={14} />
+        </button>
+        <button
+          onClick={() => setZoom(1)}
+          title="Reset zoom"
+          className="w-12 text-center text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors"
+        >
+          {Math.round(zoom * 100)}%
+        </button>
+        <button
+          onClick={zoomIn}
+          disabled={zoom >= ZOOM_MAX}
+          aria-label="Zoom in"
+          className="p-1.5 rounded-lg border border-sand-300 text-charcoal-500 hover:bg-cream-100 hover:text-terracotta-600 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+        >
+          <ZoomIn size={14} />
         </button>
       </div>
 
-      {loading && <LoadingSpinner label="Mapping customer journey…" />}
-
-      {error && (
-        <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-100 rounded-xl text-sm text-red-700">
-          <AlertCircle size={16} /> {error}
-        </div>
-      )}
-
-      {!loading && !error && (
-        <div className="overflow-x-auto pb-4">
-          <div className="flex items-start min-w-max">
-            {JOURNEY_STAGE_ORDER.map((stage, i) => {
-              const meta = JOURNEY_STAGE_META[stage]
-              const automations = JOURNEY_AUTOMATIONS.filter((a) => a.stage === stage)
-              return (
-                <Fragment key={stage}>
-                  <div className="w-[260px] flex-shrink-0">
-                    <div className={`rounded-2xl border px-4 py-3 mb-3 ${meta.bg} ${meta.border}`}>
+      <div className="overflow-x-auto pb-4">
+        <div className="flex items-start min-w-max" style={{ zoom }}>
+          {JOURNEY_STAGE_ORDER.map((stage, i) => {
+            const meta = JOURNEY_STAGE_META[stage]
+            const automations = JOURNEY_AUTOMATIONS.filter((a) => a.stage === stage)
+            return (
+              <Fragment key={stage}>
+                <div className="w-[260px] flex-shrink-0">
+                  <div className={`rounded-2xl border px-4 py-3 mb-3 ${meta.bg} ${meta.border}`}>
+                    <div className="flex items-center justify-between gap-1">
                       <p className={`font-serif text-lg tracking-tight ${meta.text}`}>{stage}</p>
-                      <p className="text-xs text-charcoal-500 mt-0.5">{counts[stage].toLocaleString()} customers</p>
-                      {stage === 'Lead' && (
-                        <p className="text-[11px] text-charcoal-400 mt-2 leading-relaxed">
-                          <span className="italic">Illustrative sources — </span>
-                          {LEAD_SOURCE_BREAKDOWN.map((s) => `${s.source} ${s.pct}%`).join(' · ')}
-                        </p>
+                      <button
+                        onClick={() => toggleRule(stage)}
+                        title="Show transition rule"
+                        className={`flex-shrink-0 p-0.5 rounded transition-colors ${meta.text} opacity-60 hover:opacity-100`}
+                      >
+                        <Info size={13} />
+                      </button>
+                    </div>
+                    <p className="text-xs text-charcoal-500 mt-0.5 flex items-center gap-1">
+                      {stage === 'Lead' && contactsLoading
+                        ? '…'
+                        : stage === 'Pre-Purchase'
+                        ? `${counts[stage].toLocaleString()} with an abandoned cart`
+                        : `${counts[stage].toLocaleString()} customers`}
+                      {DIAGNOSTIC_STAGES.includes(stage) && counts[stage] === 0 && (
+                        <span title="0 customers — check segment trigger definitions" className="flex-shrink-0">
+                          <AlertTriangle size={11} className="text-amber-600" />
+                        </span>
                       )}
-                    </div>
-                    <div className="flex flex-col gap-3">
-                      {automations.map((automation) => (
-                        <AutomationCard key={automation.id} automation={automation} onCreate={setActiveAutomation} />
-                      ))}
-                    </div>
+                    </p>
+                    {expandedRules.has(stage) && (
+                      <p className="text-[11px] text-charcoal-400 mt-2 leading-relaxed">
+                        {STAGE_TRANSITION_RULES[stage]}
+                      </p>
+                    )}
+                    {stage === 'Lead' && (
+                      <p className="text-[11px] text-charcoal-400 mt-2 leading-relaxed">
+                        <span className="italic">Illustrative sources — </span>
+                        {LEAD_SOURCE_BREAKDOWN.map((s) => `${s.source} ${s.pct}%`).join(' · ')}
+                      </p>
+                    )}
                   </div>
-                  {i < JOURNEY_STAGE_ORDER.length - 1 && (
-                    <div className="flex-shrink-0 w-8 flex items-center justify-center mt-10">
-                      <ChevronRight size={18} className="text-sand-400" />
-                    </div>
-                  )}
-                </Fragment>
-              )
-            })}
-          </div>
+                  <div className="flex flex-col gap-3">
+                    {automations.map((automation) => (
+                      <AutomationCard key={automation.id} automation={automation} onCreate={setActiveAutomation} />
+                    ))}
+                  </div>
+                </div>
+                {i < JOURNEY_STAGE_ORDER.length - 1 && (
+                  <div className="flex-shrink-0 w-8 flex items-center justify-center mt-10">
+                    <ChevronRight size={18} className="text-sand-400" />
+                  </div>
+                )}
+              </Fragment>
+            )
+          })}
         </div>
-      )}
+      </div>
 
       {activeAutomation && (
         <CreateAutomationModal
           automation={activeAutomation}
-          audience={stageAudiences[activeAutomation.stage]}
+          audience={audienceForAutomation(activeAutomation, customers, stageAudiences)}
           onClose={() => setActiveAutomation(null)}
         />
       )}
-    </section>
+    </div>
   )
 }
