@@ -10,6 +10,7 @@ import EmailPerformance from '@/components/sections/EmailPerformance'
 import CustomerIntelligence from '@/components/sections/CustomerIntelligence'
 import CustomerService from '@/components/sections/CustomerService'
 import Forecast from '@/components/sections/Forecast'
+import PendingWork from '@/components/sections/PendingWork'
 import AboutTool from '@/components/sections/AboutTool'
 
 export default function Home() {
@@ -113,6 +114,7 @@ export default function Home() {
               />
             )}
             {active === 'forecast'              && <Forecast />}
+            {active === 'pending-work'          && <PendingWork />}
             {active === 'about'                 && <AboutTool />}
           </div>
         </main>

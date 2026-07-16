@@ -15,13 +15,14 @@ import {
 export type JourneyStage = 'Pre-Purchase' | 'Lead' | Exclude<LifecycleStage, 'Never Purchased'>
 
 export const JOURNEY_STAGE_ORDER: JourneyStage[] = [
-  'Pre-Purchase', 'Lead', 'New', 'Winback', 'Loyal', 'VIP', 'At Risk', 'Lapsed', 'Lost',
+  'Pre-Purchase', 'Lead', 'New', 'Active', 'Winback', 'Loyal', 'VIP', 'At Risk', 'Lapsed', 'Lost',
 ]
 
 export const JOURNEY_STAGE_META: Record<JourneyStage, { bg: string; text: string; border: string }> = {
   'Pre-Purchase': { bg: 'bg-indigo-100', text: 'text-indigo-700',   border: 'border-indigo-200' },
   Lead:           { bg: 'bg-sand-200',   text: 'text-charcoal-700', border: 'border-sand-300' },
   New:            LIFECYCLE_STAGE_META.New,
+  Active:         LIFECYCLE_STAGE_META.Active,
   Winback:        LIFECYCLE_STAGE_META.Winback,
   Loyal:          LIFECYCLE_STAGE_META.Loyal,
   VIP:            LIFECYCLE_STAGE_META.VIP,
@@ -64,14 +65,15 @@ export const JOURNEY_AUTOMATIONS: JourneyAutomation[] = [
   { id: 'price-drop-new',        stage: 'New',      name: 'Price Drop Alert',        description: 'Notifies a customer when a product they viewed drops in price', active: false, channel: 'Email' },
   { id: 'post-purchase-education', stage: 'New',    name: 'Post-Purchase Education', description: 'How-to-wear / care instructions, separate from the review request', active: false, channel: 'Email' },
 
+  { id: 'cross-sell-campaign',   stage: 'Active',   name: 'Cross-sell campaign',     description: 'Recommends complementary products from past purchases',    active: true,  channel: 'Email', performance: { revenuePerRecipient: 3.10 } },
+  { id: 'anniversary-flow',      stage: 'Active',   name: 'Anniversary flow',        description: 'Marks the first-purchase anniversary with an offer',        active: true,  channel: 'Email', performance: { revenuePerRecipient: 2.75 } },
+  { id: 'back-in-stock-active',  stage: 'Active',   name: 'Back-in-Stock Alert',     description: 'Notifies a customer when a product they wanted is restocked', active: false, channel: 'Email' },
+  { id: 'price-drop-active',     stage: 'Active',   name: 'Price Drop Alert',        description: 'Notifies a customer when a product they viewed drops in price', active: false, channel: 'Email' },
+
   { id: 'winback-day-60',        stage: 'Winback',  name: 'Winback day 60',          description: 'First win-back email, sent 60 days after a customer’s only order', active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.95 } },
   { id: 'winback-day-75',        stage: 'Winback',  name: 'Winback day 75',          description: 'Follow-up win-back with a stronger incentive at day 75',    active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.35 } },
 
-  { id: 'cross-sell-campaign',   stage: 'Loyal',    name: 'Cross-sell campaign',     description: 'Recommends complementary products from past purchases',    active: true,  channel: 'Email', performance: { revenuePerRecipient: 3.10 } },
-  { id: 'anniversary-flow',      stage: 'Loyal',    name: 'Anniversary flow',        description: 'Marks the first-purchase anniversary with an offer',        active: true,  channel: 'Email', performance: { revenuePerRecipient: 2.75 } },
   { id: 'vip-upgrade-prompt',    stage: 'Loyal',    name: 'VIP upgrade prompt',      description: 'Highlights VIP perks to push toward the next tier',         active: false, channel: 'Email' },
-  { id: 'back-in-stock-loyal',   stage: 'Loyal',    name: 'Back-in-Stock Alert',     description: 'Notifies a customer when a product they wanted is restocked', active: false, channel: 'Email' },
-  { id: 'price-drop-loyal',      stage: 'Loyal',    name: 'Price Drop Alert',        description: 'Notifies a customer when a product they viewed drops in price', active: false, channel: 'Email' },
   { id: 'community-invite',      stage: 'Loyal',    name: 'Community invite',        description: 'Invites loyal customers into a community/loyalty programme', active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.40 } },
   { id: 'referral-program',      stage: 'Loyal',    name: 'Referral program',        description: 'Rewards loyal customers for referring friends',             active: false, channel: 'Email' },
   { id: 'new-launch-preview',    stage: 'Loyal',    name: 'New launch preview',      description: 'Early visibility into upcoming launches',                   active: false, channel: 'Email' },
@@ -117,6 +119,7 @@ export const STAGE_TRANSITION_RULES: Record<JourneyStage, string> = {
   'Pre-Purchase': 'Added to cart or browsed, but no completed order yet',
   Lead: 'Known Omnisend contact with zero completed Shopify orders',
   New: LIFECYCLE_STAGE_TRANSITION_RULES.New,
+  Active: LIFECYCLE_STAGE_TRANSITION_RULES.Active,
   Winback: LIFECYCLE_STAGE_TRANSITION_RULES.Winback,
   Loyal: LIFECYCLE_STAGE_TRANSITION_RULES.Loyal,
   VIP: LIFECYCLE_STAGE_TRANSITION_RULES.VIP,
@@ -148,7 +151,7 @@ export function computeJourneyCounts(
   const buyers = customers.filter((c) => c.orders_count > 0)
 
   const counts: Record<JourneyStage, number> = {
-    'Pre-Purchase': 0, Lead: 0, New: 0, Winback: 0, Loyal: 0, VIP: 0, 'At Risk': 0, Lapsed: 0, Lost: 0,
+    'Pre-Purchase': 0, Lead: 0, New: 0, Active: 0, Winback: 0, Loyal: 0, VIP: 0, 'At Risk': 0, Lapsed: 0, Lost: 0,
   }
 
   for (const c of buyers) counts[classifyJourneyStage(c)]++
@@ -171,7 +174,7 @@ export function groupCustomersByStage(customers: EnrichedCustomer[]): Record<Exc
   const buyers = customers.filter((c) => c.orders_count > 0)
 
   const groups: Record<Exclude<JourneyStage, 'Lead' | 'Pre-Purchase'>, EnrichedCustomer[]> = {
-    New: [], Winback: [], Loyal: [], VIP: [], 'At Risk': [], Lapsed: [], Lost: [],
+    New: [], Active: [], Winback: [], Loyal: [], VIP: [], 'At Risk': [], Lapsed: [], Lost: [],
   }
   for (const c of buyers) groups[classifyJourneyStage(c)].push(c)
   return groups

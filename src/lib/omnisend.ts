@@ -10,7 +10,8 @@ function headers() {
 
 // Newer date-versioned Omnisend API (e.g. /segments) — different base URL and
 // auth header than the stable v3 API used everywhere else in this app.
-// Unverified against this account; iterate here if the version/auth is wrong.
+// Verified 2026-07-15: this auth header + version string return 200 against a
+// live account (confirmed via GET /segments, which returned real segment data).
 const DATED_BASE = 'https://api.omnisend.com/api'
 const DATED_API_VERSION = '2026-03-15'
 
@@ -85,11 +86,12 @@ interface OmnisendContactResult {
 // else only searches/patches existing ones) — the /contacts POST body below follows
 // Omnisend's documented v3 "identifiers" shape but is unverified against this account;
 // iterate here if the response comes back malformed or contactID is missing.
-// Counts total Omnisend contacts by paging through /contacts. Assumes offset-based
-// pagination (matching the {previous,next,offset,limit} paging shape already seen on
-// /campaigns) — unverified against this account for /contacts specifically; iterate
-// here if paging works differently (e.g. cursor-based via paging.next as a full URL).
-// Capped at 20 pages (~5,000 contacts at the max page size) as a safety limit.
+// Counts total Omnisend contacts by paging through /contacts with manually
+// incremented offset. Verified 2026-07-15 against a live account: /contacts also
+// supports a cursor (paging.next, an "after" token) as its primary pagination
+// mechanism, but manually incrementing offset returns identical results page-for-
+// page — confirmed by comparing an offset=5 request against following paging.next
+// directly. Capped at 20 pages (~5,000 contacts at the max page size) as a safety limit.
 export async function countOmnisendContacts(): Promise<number> {
   const limit = 250
   let offset = 0

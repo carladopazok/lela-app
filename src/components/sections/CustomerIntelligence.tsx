@@ -15,7 +15,7 @@ import Segments from '@/components/sections/Segments'
 import CustomerJourney from '@/components/sections/CustomerJourney'
 import { computeRFM, SEGMENT_META } from '@/lib/rfm'
 import type { RFMSegment } from '@/lib/rfm'
-import { VIP_MIN_ORDERS, AT_RISK_START_DAYS, LAPSED_START_DAYS, LOST_DAYS, ABANDONED_CHECKOUT_WINDOW_DAYS } from '@/lib/segmentation'
+import { LOYAL_MIN_ORDERS, VIP_MIN_ORDERS, AT_RISK_START_DAYS, LAPSED_START_DAYS, LOST_DAYS, ABANDONED_CHECKOUT_WINDOW_DAYS } from '@/lib/segmentation'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import type { EnrichedCustomer, ShopifyOrder, CSTicket, RelatedProductsData } from '@/types'
 import { CUSTOMER_TAGS } from '@/types'
@@ -949,8 +949,9 @@ export default function CustomerIntelligence({
               <div className="grid grid-cols-2 gap-3 text-sm text-charcoal-500">
                 <div className="flex items-start gap-2"><TagBadge tag="never-purchased" /><span>0 orders</span></div>
                 <div className="flex items-start gap-2"><TagBadge tag="1-order" /><span>Exactly 1 order, within {AT_RISK_START_DAYS} days</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="active" /><span>2–{LOYAL_MIN_ORDERS - 1} orders, most recent within {AT_RISK_START_DAYS} days</span></div>
                 <div className="flex items-start gap-2"><TagBadge tag="winback" /><span>Exactly 1 order, {AT_RISK_START_DAYS}–{LAPSED_START_DAYS - 1} days since it</span></div>
-                <div className="flex items-start gap-2"><TagBadge tag="loyal" /><span>2–{VIP_MIN_ORDERS - 1} orders, most recent within {AT_RISK_START_DAYS} days</span></div>
+                <div className="flex items-start gap-2"><TagBadge tag="loyal" /><span>{LOYAL_MIN_ORDERS}–{VIP_MIN_ORDERS - 1} orders, most recent within {AT_RISK_START_DAYS} days</span></div>
                 <div className="flex items-start gap-2"><TagBadge tag="VIP" /><span>{VIP_MIN_ORDERS}+ orders, most recent within {LOST_DAYS} days</span></div>
                 <div className="flex items-start gap-2"><TagBadge tag="at-risk" /><span>2+ orders (below VIP), {AT_RISK_START_DAYS}–{LAPSED_START_DAYS - 1} days since last order</span></div>
                 <div className="flex items-start gap-2"><TagBadge tag="lapsed" /><span>{LAPSED_START_DAYS}–{LOST_DAYS - 1} days since last order</span></div>

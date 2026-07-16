@@ -1,6 +1,7 @@
 export type LifecycleStage =
   | 'Never Purchased'
   | 'New'
+  | 'Active'
   | 'Winback'
   | 'Loyal'
   | 'VIP'
@@ -9,12 +10,13 @@ export type LifecycleStage =
   | 'Lost'
 
 export const LIFECYCLE_STAGE_ORDER: LifecycleStage[] = [
-  'Never Purchased', 'New', 'Winback', 'Loyal', 'VIP', 'At Risk', 'Lapsed', 'Lost',
+  'Never Purchased', 'New', 'Active', 'Winback', 'Loyal', 'VIP', 'At Risk', 'Lapsed', 'Lost',
 ]
 
 export const LIFECYCLE_STAGE_META: Record<LifecycleStage, { bg: string; text: string; border: string }> = {
   'Never Purchased': { bg: 'bg-sand-200',   text: 'text-charcoal-700', border: 'border-sand-300' },
   'New':             { bg: 'bg-violet-100', text: 'text-violet-700',   border: 'border-violet-200' },
+  'Active':          { bg: 'bg-blue-100',   text: 'text-blue-700',     border: 'border-blue-200' },
   'Winback':         { bg: 'bg-orange-100', text: 'text-orange-700',   border: 'border-orange-200' },
   'Loyal':           { bg: 'bg-teal-100',   text: 'text-teal-700',     border: 'border-teal-200' },
   'VIP':             { bg: 'bg-teal-100',   text: 'text-teal-700',     border: 'border-teal-200' },
@@ -39,11 +41,18 @@ export const LIFECYCLE_STAGE_META: Record<LifecycleStage, { bg: string; text: st
 //   not a fixed threshold). This file replaces both with one fixed-threshold
 //   classifier; rfm.ts / the RFM Analysis tab is untouched and stays a separate
 //   analytical lens, no longer an input to lifecycle classification.
+// - 2026-07-15  Re-added 'Active' (2-3 orders, recent) between 'New' and 'Loyal' —
+//   the initial unification had folded it into 'Loyal'. 'Loyal' and 'VIP' shifted
+//   up to make room: Loyal was 2+/4+, now 4-6/7+.
+
+/** Orders needed to leave 'Active' and become 'Loyal'. Below this (2-3 orders),
+ *  a recent repeat customer is 'Active'. */
+export const LOYAL_MIN_ORDERS = 4
 
 /** Orders needed to be 'VIP' instead of 'Loyal'. Order-count-based rather than a
  *  spend threshold — deliberately, since there's no store-specific AOV data this
  *  app can use to pick a defensible euro figure yet. */
-export const VIP_MIN_ORDERS = 4
+export const VIP_MIN_ORDERS = 7
 
 /** Days since last order before a repeat customer below the VIP tier is flagged
  *  ('At Risk'), or a one-time buyer is flagged ('Winback'). Below this, a 1-order
@@ -87,7 +96,8 @@ export function classifyCustomerStage(input: SegmentationInput): LifecycleStage 
   if (days > LAPSED_START_DAYS) return 'Lapsed'
   if (days > AT_RISK_START_DAYS) return input.ordersCount === 1 ? 'Winback' : 'At Risk'
   if (input.ordersCount === 1) return 'New'
-  return 'Loyal'
+  if (input.ordersCount >= LOYAL_MIN_ORDERS) return 'Loyal'
+  return 'Active'
 }
 
 export interface AbandonedCheckoutLike {
@@ -104,8 +114,9 @@ export function hasRecentAbandonedCheckout(checkouts: AbandonedCheckoutLike[]): 
 export const STAGE_TRANSITION_RULES: Record<LifecycleStage, string> = {
   'Never Purchased': '0 completed orders',
   New: `Exactly 1 order, within ${AT_RISK_START_DAYS} days of it`,
+  Active: `2–${LOYAL_MIN_ORDERS - 1} orders, most recent within ${AT_RISK_START_DAYS} days`,
   Winback: `Exactly 1 order, ${AT_RISK_START_DAYS}–${LAPSED_START_DAYS - 1} days since it`,
-  Loyal: `2–${VIP_MIN_ORDERS - 1} orders, most recent within ${AT_RISK_START_DAYS} days`,
+  Loyal: `${LOYAL_MIN_ORDERS}–${VIP_MIN_ORDERS - 1} orders, most recent within ${AT_RISK_START_DAYS} days`,
   VIP: `${VIP_MIN_ORDERS}+ orders, most recent within ${LOST_DAYS} days`,
   'At Risk': `2+ orders (below VIP tier), ${AT_RISK_START_DAYS}–${LAPSED_START_DAYS - 1} days since last order`,
   Lapsed: `${LAPSED_START_DAYS}–${LOST_DAYS - 1} days since last order`,

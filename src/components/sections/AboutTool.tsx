@@ -1,5 +1,5 @@
 import { ExternalLink } from 'lucide-react'
-import { VIP_MIN_ORDERS, AT_RISK_START_DAYS, LAPSED_START_DAYS, LOST_DAYS, ABANDONED_CHECKOUT_WINDOW_DAYS } from '@/lib/segmentation'
+import { LOYAL_MIN_ORDERS, VIP_MIN_ORDERS, AT_RISK_START_DAYS, LAPSED_START_DAYS, LOST_DAYS, ABANDONED_CHECKOUT_WINDOW_DAYS } from '@/lib/segmentation'
 
 // Pulled from src/lib/segmentation.ts, the single real source of truth behind both
 // the Customers tab and the Journey tab — this copy used to describe a different,
@@ -16,8 +16,8 @@ const LOGIC_ITEMS = [
   {
     tag: 'Loyal',
     color: 'bg-olive-100 text-olive-600',
-    logic: `2–${VIP_MIN_ORDERS - 1} orders, active within ${AT_RISK_START_DAYS} days`,
-    why: 'Repeat purchasers below the VIP bar are still your most profitable segment relative to acquisition cost. They deserve acknowledgment — a community invite, referral access, or an upgrade nudge toward VIP.',
+    logic: `${LOYAL_MIN_ORDERS}–${VIP_MIN_ORDERS - 1} orders, active within ${AT_RISK_START_DAYS} days`,
+    why: 'Repeat purchasers below the VIP bar are still your most profitable segment relative to acquisition cost. They deserve acknowledgment — a community invite, referral access, or an upgrade nudge toward VIP. (A separate "Active" tier catches 2-3 order customers who haven\'t reached Loyal yet.)',
   },
   {
     tag: 'At Risk / Winback',

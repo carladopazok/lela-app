@@ -23,9 +23,9 @@ Two modes (checked in this order by middleware and `getSession()`):
 1. **Env var shortcut**: set `SHOPIFY_ACCESS_TOKEN` + `SHOPIFY_STORE_DOMAIN` → skips OAuth entirely
 2. **OAuth**: Shopify Partner app flow via `/api/auth` → `/api/auth/callback`; session stored in AES-256-GCM HTTP-only cookie `lela_session`
 
-Required Shopify scopes: `read_orders, read_all_orders, read_customers, write_customers`  
+Required Shopify scopes: `read_orders, read_all_orders, read_customers, write_customers, read_products, read_inventory`  
 `read_all_orders` is mandatory — without it, orders older than 60 days are invisible.  
-`read_products` is **not** granted — always wrap `/products.json` fetches in a try/catch.
+`read_products` and `read_inventory` are granted (confirmed 2026-07-15) — the try/catch wrapping around `/products.json` fetches can stay as general defensive error handling, but isn't compensating for a missing scope anymore.
 
 ## Architecture
 
@@ -65,7 +65,7 @@ Section header: `text-xs font-semibold uppercase tracking-widest text-charcoal-4
 
 - `EnrichedCustomer` — `ShopifyCustomer` + `{ aov, lastOrderDate, computedTags, manualTags, productTags }`
 - `ScoredCustomer` — `EnrichedCustomer` + `{ rfm: { r, f, m }, segment }` (from `src/lib/rfm.ts`)
-- `CUSTOMER_TAGS` — `['VIP', '1-order', 'never-purchased', 'winback']`
+- `CUSTOMER_TAGS` — `['VIP', 'loyal', 'active', '1-order', 'winback', 'at-risk', 'lapsed', 'lost', 'never-purchased', 'abandoned-checkout']`, computed by the shared classifier in `src/lib/segmentation.ts` (see its changelog comment for thresholds)
 - `CSTicket`, `CSMacro`, `CSMessage` — customer service entities
 - `ShopifyOrder` includes `line_items: ShopifyLineItem[]`; `product_type` on line items is often empty — use `data/product-categories.json` as fallback
 

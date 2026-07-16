@@ -20,6 +20,7 @@ interface TaggingInput {
 const STAGE_TO_TAG: Record<LifecycleStage, CustomerTag> = {
   'Never Purchased': 'never-purchased',
   New: '1-order',
+  Active: 'active',
   Winback: 'winback',
   Loyal: 'loyal',
   VIP: 'VIP',
