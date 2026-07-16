@@ -13,8 +13,6 @@ import CollapsibleCard from '@/components/ui/CollapsibleCard'
 import RFMAnalysis from '@/components/sections/RFMAnalysis'
 import Segments from '@/components/sections/Segments'
 import CustomerJourney from '@/components/sections/CustomerJourney'
-import { computeRFM, SEGMENT_META } from '@/lib/rfm'
-import type { RFMSegment } from '@/lib/rfm'
 import { LOYAL_MIN_ORDERS, VIP_MIN_ORDERS, AT_RISK_START_DAYS, LAPSED_START_DAYS, LOST_DAYS, ABANDONED_CHECKOUT_WINDOW_DAYS } from '@/lib/segmentation'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import type { EnrichedCustomer, ShopifyOrder, CSTicket, RelatedProductsData } from '@/types'
@@ -34,15 +32,19 @@ function fmt(n: number) {
   return `€${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-// Tags actually pushed to Shopify/Omnisend on sync: behavioral tags, one per
-// purchased product category, the customer's cohort, and their country — so
-// every segment shown in the Segments tab is targetable as a real tag in campaigns.
-function syncableTags(c: EnrichedCustomer, cohort?: RFMSegment): string[] {
+// Tags actually pushed to Shopify/Omnisend on sync: behavioral tags (the single
+// segmentation.ts stage tag + abandoned-checkout), one per purchased product
+// category, and country — so every segment shown in the Segments tab is
+// targetable as a real tag in campaigns. Deliberately excludes the RFM cohort —
+// that was a second, independently-computed label (quintile-relative, not fixed
+// thresholds) that could disagree with the stage tag above; segmentation.ts is
+// the only per-customer classification synced externally now. RFM Analysis
+// itself is untouched, just no longer surfaced or synced per customer here.
+function syncableTags(c: EnrichedCustomer): string[] {
   return [
     ...c.computedTags,
     ...c.manualTags,
     ...c.productTags.map((t) => `category-${t}`),
-    ...(cohort ? [`cohort-${cohort}`] : []),
     ...(c.country ? [`country-${c.country}`] : []),
   ]
 }
@@ -628,6 +630,8 @@ export default function CustomerIntelligence({
   const [syncingId, setSyncingId] = useState<number | null>(null)
   const [syncedIds, setSyncedIds] = useState<Set<number>>(new Set())
   const [bulkSyncing, setBulkSyncing] = useState(false)
+  const [cleaningTags, setCleaningTags] = useState(false)
+  const [cleanupResult, setCleanupResult] = useState<{ checked: number; shopifyCleaned: number; omnisendCleaned: number; errors: unknown[] } | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [activeView, setActiveView] = useState<'customers' | 'rfm' | 'segments' | 'journey'>('customers')
   const [taggingLogicOpen, setTaggingLogicOpen] = useState(false)
@@ -698,11 +702,6 @@ export default function CustomerIntelligence({
     }
     return map
   }, [tickets])
-
-  const cohortById = useMemo(() => {
-    const scored = computeRFM(customers)
-    return new Map(scored.map((s) => [s.id, s.segment]))
-  }, [customers])
 
   function toggleEmailVisibility(id: number, e: React.MouseEvent) {
     e.stopPropagation()
@@ -825,7 +824,7 @@ export default function CustomerIntelligence({
   async function syncCustomerTags(customer: EnrichedCustomer, e: React.MouseEvent) {
     e.stopPropagation()
     setSyncingId(customer.id)
-    const allTags = syncableTags(customer, cohortById.get(customer.id))
+    const allTags = syncableTags(customer)
     try {
       await fetch(`/api/shopify/customers/${customer.id}/tags`, {
         method: 'PUT',
@@ -848,7 +847,7 @@ export default function CustomerIntelligence({
   async function syncAllTags() {
     setBulkSyncing(true)
     for (const c of customers.filter((c) => c.computedTags.length > 0 || c.manualTags.length > 0 || c.productTags.length > 0)) {
-      const allTags = syncableTags(c, cohortById.get(c.id))
+      const allTags = syncableTags(c)
       await fetch(`/api/shopify/customers/${c.id}/tags`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -864,6 +863,21 @@ export default function CustomerIntelligence({
       setSyncedIds((prev) => new Set(Array.from(prev).concat(c.id)))
     }
     setBulkSyncing(false)
+  }
+
+  // One-time migration: removes lela-cohort-* tags left on real Shopify/Omnisend
+  // records by syncs that ran before the RFM cohort stopped being pushed as an
+  // external tag (see syncableTags() above). Safe to click more than once.
+  async function cleanUpCohortTags() {
+    setCleaningTags(true)
+    setCleanupResult(null)
+    try {
+      const res = await fetch('/api/cleanup-cohort-tags', { method: 'POST' })
+      const data = await res.json()
+      if (res.ok) setCleanupResult(data)
+    } finally {
+      setCleaningTags(false)
+    }
   }
 
   const taggedCount = customers.filter((c) => c.computedTags.length > 0 || c.manualTags.length > 0 || c.productTags.length > 0).length
@@ -884,6 +898,17 @@ export default function CustomerIntelligence({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {!loading && activeView === 'customers' && (
+            <button
+              onClick={cleanUpCohortTags}
+              disabled={cleaningTags}
+              title="One-time cleanup: removes stale lela-cohort-* tags left by old syncs"
+              className="flex items-center gap-2 text-sm font-medium text-charcoal-500 border border-sand-300 hover:bg-cream-100 px-4 py-2 rounded-lg transition-colors disabled:opacity-60"
+            >
+              {cleaningTags ? <Loader2 size={14} className="animate-spin" /> : <Tag size={14} />}
+              Clean Up Stale Cohort Tags
+            </button>
+          )}
           {!loading && taggedCount > 0 && activeView === 'customers' && (
             <button
               onClick={syncAllTags}
@@ -903,6 +928,16 @@ export default function CustomerIntelligence({
           </button>
         </div>
       </div>
+
+      {cleanupResult && (
+        <div className="text-sm bg-white rounded-xl shadow-card px-4 py-3 mb-4">
+          <p className="text-charcoal-700">
+            Checked <strong>{cleanupResult.checked}</strong> customers · cleaned <strong>{cleanupResult.shopifyCleaned}</strong> on
+            Shopify, <strong>{cleanupResult.omnisendCleaned}</strong> on Omnisend
+            {cleanupResult.errors.length > 0 && <> · <strong className="text-red-600">{cleanupResult.errors.length}</strong> error{cleanupResult.errors.length === 1 ? '' : 's'}</>}
+          </p>
+        </div>
+      )}
 
       {/* Tab bar */}
       <div className="flex gap-1 mb-6 bg-sand-100 p-1 rounded-xl w-fit">
@@ -1020,7 +1055,7 @@ export default function CustomerIntelligence({
                 </thead>
                 <tbody className="divide-y divide-sand-200">
                   {sorted.map((c) => {
-                    const allTags = syncableTags(c, cohortById.get(c.id))
+                    const allTags = syncableTags(c)
                     const isExpanded = expandedId === c.id
                     const isEmailHidden = hiddenEmailIds.has(c.id)
                     const customerTickets = ticketsByEmail.get(c.email.toLowerCase()) ?? []
@@ -1048,16 +1083,9 @@ export default function CustomerIntelligence({
                               )}
                             </p>
                             {(() => {
-                              const cohort = cohortById.get(c.id)
-                              const cohortMeta = cohort ? SEGMENT_META[cohort] : null
-                              if (!cohortMeta && c.productTags.length === 0 && !c.country) return null
+                              if (c.productTags.length === 0 && !c.country) return null
                               return (
                                 <div className="flex flex-wrap gap-1 mt-1.5">
-                                  {cohortMeta && (
-                                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium ${cohortMeta.bg} ${cohortMeta.text} border ${cohortMeta.border}`}>
-                                      {cohort}
-                                    </span>
-                                  )}
                                   {c.country && (
                                     <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-teal-50 text-teal-700 border border-teal-200">
                                       {c.country}

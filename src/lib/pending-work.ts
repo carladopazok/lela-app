@@ -50,13 +50,15 @@ export const PENDING_WORK: PendingWorkItem[] = [
     area: 'Deployment & Storefront',
     status: 'blocked',
     blockedBy: 'deploy-app',
-    summary: 'Automatically re-tagging a customer and triggering the matching flow the moment their lifecycle stage changes was scoped, then paused — it needs a public URL to receive Shopify webhooks and somewhere to run a scheduled job, neither of which exist yet.',
+    summary: 'The foundation now exists and works manually: POST /api/sync-stages diffs every customer\'s freshly computed stage (getCustomerStages() in src/lib/segmentation.ts) against data/customer-stage.json, swaps the Omnisend tag on anything changed, and logs the transition to data/customer-stage-history.json — triggered by a button on the Journey tab. What\'s still missing is making it automatic: no Shopify webhooks, no scheduled job, neither possible without a public URL.',
     instructions: [
       'Deploy the app first (see above).',
       'Confirm inside Omnisend whether automations trigger off segment-membership changes automatically, or need a direct Events API call per transition — this decides the integration pattern.',
       'Resolve "Map Journey board flows to real Omnisend automations" below first — there’s currently no link between a Lela stage and a real Omnisend automation ID to trigger.',
-      'Register Shopify webhooks (orders/create, refunds/create, checkouts/create — the last one needs a delayed check, since "abandoned" only becomes true after a few hours of inactivity), build a webhook receiver with HMAC signature verification, a data/stage-transitions.json audit log, and a scheduled job for threshold-only transitions that no webhook covers (e.g. New → Winback purely from elapsed time).',
+      'Register Shopify webhooks (orders/create, refunds/create, checkouts/create — the last one needs a delayed check, since "abandoned" only becomes true after a few hours of inactivity) that call /api/sync-stages (or a per-customer variant of it) instead of waiting for someone to click the button.',
+      'Add a scheduled job (e.g. Vercel Cron) hitting the same route on an interval, for threshold-only transitions no webhook covers (e.g. New → Winback purely from elapsed time).',
     ],
+    relatedFiles: ['src/app/api/sync-stages/route.ts', 'src/lib/segmentation.ts', 'src/lib/stage-storage.ts', 'src/components/sections/CustomerJourney.tsx'],
   },
   {
     id: 'build-omnisend-automations',

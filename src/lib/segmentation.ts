@@ -1,3 +1,5 @@
+import type { EnrichedCustomer } from '@/types'
+
 export type LifecycleStage =
   | 'Never Purchased'
   | 'New'
@@ -109,6 +111,28 @@ export interface AbandonedCheckoutLike {
 // regardless of age, as long as it was within the API's 1-year fetch window).
 export function hasRecentAbandonedCheckout(checkouts: AbandonedCheckoutLike[]): boolean {
   return checkouts.some((co) => daysSince(new Date(co.createdAt)) <= ABANDONED_CHECKOUT_WINDOW_DAYS)
+}
+
+export interface CustomerStageResult {
+  id: number
+  email: string
+  stage: LifecycleStage
+}
+
+// Runs classifyCustomerStage across a full customer list, keeping enough identity
+// (id, email) to act on the result — used by /api/sync-stages, which needs to know
+// *which* customer changed stage, not just aggregate counts (that's what
+// computeJourneyCounts in src/lib/journey.ts is for).
+export function getCustomerStages(customers: EnrichedCustomer[]): CustomerStageResult[] {
+  return customers.map((c) => ({
+    id: c.id,
+    email: c.email,
+    stage: classifyCustomerStage({
+      ordersCount: c.orders_count,
+      lastOrderDate: c.lastOrderDate ? new Date(c.lastOrderDate) : null,
+      emailMarketingConsentState: c.email_marketing_consent?.state,
+    }),
+  }))
 }
 
 export const STAGE_TRANSITION_RULES: Record<LifecycleStage, string> = {

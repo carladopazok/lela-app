@@ -17,7 +17,7 @@ interface TaggingInput {
 // contacts under the old rules (never-purchased, VIP, winback, 1-order,
 // abandoned-checkout), so existing synced tags aren't orphaned. 'loyal', 'at-risk',
 // and 'lapsed'/'lost' are new — see src/lib/segmentation.ts for the thresholds.
-const STAGE_TO_TAG: Record<LifecycleStage, CustomerTag> = {
+export const STAGE_TO_TAG: Record<LifecycleStage, CustomerTag> = {
   'Never Purchased': 'never-purchased',
   New: '1-order',
   Active: 'active',

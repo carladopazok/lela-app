@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, Fragment } from 'react'
 import {
   ChevronRight, ExternalLink, CheckCircle2, Loader2, AlertCircle, ZoomIn, ZoomOut,
-  AlertTriangle, Info, Star, Mail, MessageSquare,
+  AlertTriangle, Info, Star, Mail, MessageSquare, RefreshCw,
 } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 import {
@@ -224,6 +224,25 @@ export default function CustomerJourney({ customers }: { customers: EnrichedCust
   const [activeAutomation, setActiveAutomation] = useState<JourneyAutomation | null>(null)
   const [zoom, setZoom] = useState(1)
   const [expandedRules, setExpandedRules] = useState<Set<JourneyStage>>(new Set())
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState<{ checked: number; changed: number; errors: { customerId: number; email: string; error: string }[] } | null>(null)
+  const [syncError, setSyncError] = useState<string | null>(null)
+
+  async function syncStages() {
+    setSyncing(true)
+    setSyncError(null)
+    setSyncResult(null)
+    try {
+      const res = await fetch('/api/sync-stages', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Sync failed')
+      setSyncResult(data)
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : 'Sync failed')
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   function zoomIn() { setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100)) }
   function zoomOut() { setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100)) }
@@ -260,31 +279,65 @@ export default function CustomerJourney({ customers }: { customers: EnrichedCust
 
   return (
     <div>
-      <div className="flex items-center justify-end gap-1 mb-3">
+      <div className="flex items-center justify-between gap-3 mb-3">
         <button
-          onClick={zoomOut}
-          disabled={zoom <= ZOOM_MIN}
-          aria-label="Zoom out"
-          className="p-1.5 rounded-lg border border-sand-300 text-charcoal-500 hover:bg-cream-100 hover:text-terracotta-600 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+          onClick={syncStages}
+          disabled={syncing}
+          className="flex items-center gap-2 text-sm font-medium text-white bg-olive-500 hover:bg-olive-600 px-4 py-2 rounded-lg transition-colors disabled:opacity-60"
         >
-          <ZoomOut size={14} />
+          {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+          {syncing ? 'Syncing…' : 'Sync Stages to Omnisend'}
         </button>
-        <button
-          onClick={() => setZoom(1)}
-          title="Reset zoom"
-          className="w-12 text-center text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors"
-        >
-          {Math.round(zoom * 100)}%
-        </button>
-        <button
-          onClick={zoomIn}
-          disabled={zoom >= ZOOM_MAX}
-          aria-label="Zoom in"
-          className="p-1.5 rounded-lg border border-sand-300 text-charcoal-500 hover:bg-cream-100 hover:text-terracotta-600 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
-        >
-          <ZoomIn size={14} />
-        </button>
+
+        <div className="flex items-center gap-1">
+          <button
+            onClick={zoomOut}
+            disabled={zoom <= ZOOM_MIN}
+            aria-label="Zoom out"
+            className="p-1.5 rounded-lg border border-sand-300 text-charcoal-500 hover:bg-cream-100 hover:text-terracotta-600 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+          >
+            <ZoomOut size={14} />
+          </button>
+          <button
+            onClick={() => setZoom(1)}
+            title="Reset zoom"
+            className="w-12 text-center text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            onClick={zoomIn}
+            disabled={zoom >= ZOOM_MAX}
+            aria-label="Zoom in"
+            className="p-1.5 rounded-lg border border-sand-300 text-charcoal-500 hover:bg-cream-100 hover:text-terracotta-600 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+          >
+            <ZoomIn size={14} />
+          </button>
+        </div>
       </div>
+
+      {syncError && (
+        <div className="flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-3">
+          <AlertCircle size={14} className="flex-shrink-0" /> {syncError}
+        </div>
+      )}
+
+      {syncResult && (
+        <div className="text-sm bg-white rounded-xl shadow-card px-4 py-3 mb-3">
+          <p className="text-charcoal-700">
+            Checked <strong>{syncResult.checked}</strong> customers · <strong>{syncResult.changed}</strong> stage
+            change{syncResult.changed === 1 ? '' : 's'} synced to Omnisend
+            {syncResult.errors.length > 0 && <> · <strong className="text-red-600">{syncResult.errors.length}</strong> error{syncResult.errors.length === 1 ? '' : 's'}</>}
+          </p>
+          {syncResult.errors.length > 0 && (
+            <ul className="mt-2 space-y-1 text-xs text-red-600">
+              {syncResult.errors.map((e) => (
+                <li key={e.customerId}>{e.email || `Customer ${e.customerId}`}: {e.error}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       <div className="overflow-x-auto pb-4">
         <div className="flex items-start min-w-max" style={{ zoom }}>
