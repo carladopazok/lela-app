@@ -369,6 +369,9 @@ export interface CampaignRow {
   totalSent: number
   openRate: number | null
   clickRate: number | null
+  bounced: number
+  complained: number
+  unsubscribed: number
   attributedRevenue: number | null
   currency: string
 }

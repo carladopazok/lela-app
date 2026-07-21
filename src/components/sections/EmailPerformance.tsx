@@ -1,141 +1,125 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { RefreshCw, AlertCircle, TrendingUp } from 'lucide-react'
-import LoadingSpinner from '@/components/ui/LoadingSpinner'
-import type { CampaignRow } from '@/types'
+import { CheckCircle2 } from 'lucide-react'
+import DemoDataBadge from '@/components/ui/DemoDataBadge'
+import EmailFlows from '@/components/sections/EmailFlows'
+import EmailCampaigns from '@/components/sections/EmailCampaigns'
+import EmailDeliverability from '@/components/sections/EmailDeliverability'
+import EmailEngagementRecency from '@/components/sections/EmailEngagementRecency'
+import EmailStageAttribution from '@/components/sections/EmailStageAttribution'
 
-function pct(n: number | null) {
-  if (n === null) return '—'
-  return `${(n * 100).toFixed(1)}%`
-}
+type View = 'flows' | 'campaigns' | 'deliverability' | 'engagement' | 'attribution'
 
-function revenue(n: number | null, currency: string) {
-  if (n === null || n === 0) return '—'
-  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-}
+const VIEWS: { id: View; label: string }[] = [
+  { id: 'flows', label: 'Flows' },
+  { id: 'campaigns', label: 'Campaigns' },
+  { id: 'deliverability', label: 'Deliverability' },
+  { id: 'engagement', label: 'Engagement Recency' },
+  { id: 'attribution', label: 'Stage Attribution' },
+]
 
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-}
+// Local to this tab, separate from the app-wide "Include Dummy Data" toggle
+// in the Sidebar — that one blends fabricated Shopify orders/customers into
+// real data elsewhere; this one switches Campaigns/Deliverability between
+// the hand-authored demo dataset and live Omnisend analytics. Flows,
+// Engagement Recency, and the illustrative half of Stage Attribution have no
+// live source yet (see src/lib/omnisend.ts's omnisendAnalyticsReport comment)
+// so they stay on modeled data regardless of this toggle.
+const STORAGE_KEY = 'lela_email_perf_real_data'
 
-function RateBar({ value }: { value: number | null }) {
-  if (value === null) return <span className="text-charcoal-400">—</span>
-  const pctVal = Math.min(value * 100, 100)
-  return (
-    <div className="flex items-center gap-2">
-      <div className="w-20 bg-sand-200 rounded-full h-1.5 flex-shrink-0">
-        <div className="bg-terracotta-500 h-1.5 rounded-full" style={{ width: `${pctVal}%` }} />
-      </div>
-      <span className="text-sm text-charcoal-700 w-12">{pct(value)}</span>
-    </div>
-  )
-}
+export default function EmailPerformance({
+  initialView,
+  onInitialViewHandled,
+  onNavigateToJourney,
+}: {
+  initialView?: 'attribution' | null
+  onInitialViewHandled?: () => void
+  onNavigateToJourney?: () => void
+}) {
+  const [activeView, setActiveView] = useState<View>('flows')
+  const [useRealData, setUseRealData] = useState(false)
 
-export default function EmailPerformance() {
-  const [campaigns, setCampaigns] = useState<CampaignRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    setUseRealData(window.localStorage.getItem(STORAGE_KEY) === '1')
+  }, [])
 
-  async function load() {
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch('/api/omnisend/campaigns')
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      setCampaigns(data.campaigns)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load')
-    } finally {
-      setLoading(false)
-    }
+  function toggleRealData() {
+    const next = !useRealData
+    setUseRealData(next)
+    window.localStorage.setItem(STORAGE_KEY, next ? '1' : '0')
   }
 
-  useEffect(() => { load() }, [])
-
-  const avgOpenRate = campaigns.length > 0
-    ? campaigns.filter(c => c.openRate !== null).reduce((s, c) => s + (c.openRate ?? 0), 0) /
-      campaigns.filter(c => c.openRate !== null).length
-    : null
+  useEffect(() => {
+    if (!initialView) return
+    setActiveView(initialView)
+    onInitialViewHandled?.()
+  }, [initialView, onInitialViewHandled])
 
   return (
-    <section className="max-w-4xl">
-      <div className="flex items-start justify-between mb-8">
+    <section className="max-w-5xl">
+      <div className="flex items-start justify-between gap-3 mb-6 flex-wrap">
         <div>
-          <h2 className="font-serif text-3xl text-charcoal-700 tracking-tight">Email Performance</h2>
-          <p className="text-sm text-charcoal-400 mt-1.5">Last 10 Omnisend campaigns</p>
+          <div className="flex items-center gap-3">
+            <h2 className="font-serif text-3xl text-charcoal-700 tracking-tight">Email Performance</h2>
+            {useRealData ? (
+              <span
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-olive-100 text-olive-600 border border-olive-200"
+                title="Flows, Campaigns, and Deliverability use real Omnisend data. Flow-level numbers are per-workflow totals, not a per-email step breakdown. Engagement Recency and the illustrative half of Stage Attribution are still modeled — no live source available for those yet."
+              >
+                <CheckCircle2 size={12} /> Partially live
+              </span>
+            ) : (
+              <DemoDataBadge />
+            )}
+          </div>
+          <p className="text-sm text-charcoal-400 mt-1.5">
+            Flows and campaigns, tracked separately — plus deliverability, engagement recency, and how they connect
+            to the lifecycle stages in Customer Intelligence.
+          </p>
         </div>
+
         <button
-          onClick={load}
-          disabled={loading}
-          className="flex items-center gap-2 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-terracotta-100 disabled:opacity-50"
+          onClick={toggleRealData}
+          className="flex items-center gap-2 flex-shrink-0"
+          aria-pressed={useRealData}
         >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          Refresh
+          <span className="text-xs font-medium text-charcoal-500">
+            {useRealData ? 'Real data' : 'Demo data'}
+          </span>
+          <span
+            className={`relative inline-flex h-4 w-7 flex-shrink-0 items-center rounded-full transition-colors ${
+              useRealData ? 'bg-terracotta-500' : 'bg-sand-300'
+            }`}
+          >
+            <span
+              className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                useRealData ? 'translate-x-3.5' : 'translate-x-0.5'
+              }`}
+            />
+          </span>
         </button>
       </div>
 
-      {loading && <LoadingSpinner label="Fetching campaigns…" />}
+      <div className="flex bg-sand-100 rounded-full p-1 gap-0.5 w-fit mb-6 flex-wrap">
+        {VIEWS.map((v) => (
+          <button
+            key={v.id}
+            onClick={() => setActiveView(v.id)}
+            className={`px-3.5 py-1.5 text-xs font-medium rounded-full transition-colors ${
+              activeView === v.id ? 'bg-white text-terracotta-600 shadow-card' : 'text-charcoal-400 hover:text-charcoal-700'
+            }`}
+          >
+            {v.label}
+          </button>
+        ))}
+      </div>
 
-      {error && (
-        <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-100 rounded-xl text-sm text-red-700">
-          <AlertCircle size={16} /> {error}
-        </div>
-      )}
-
-      {!loading && !error && campaigns.length === 0 && (
-        <div className="text-center py-20 text-charcoal-400">
-          <p className="text-4xl mb-3">📭</p>
-          <p className="font-medium">No campaigns found</p>
-          <p className="text-sm mt-1">Send your first Omnisend campaign to see data here.</p>
-        </div>
-      )}
-
-      {!loading && !error && campaigns.length > 0 && (
-        <>
-          {avgOpenRate !== null && (
-            <div className="flex items-center gap-3 bg-olive-500 text-white rounded-2xl px-6 py-4 mb-6">
-              <TrendingUp size={18} />
-              <p className="text-sm font-medium">
-                Avg. open rate across these campaigns: <strong>{pct(avgOpenRate)}</strong>
-              </p>
-            </div>
-          )}
-
-          <div className="bg-white rounded-2xl shadow-card overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-sand-100 text-left">
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Campaign</th>
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Sent</th>
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Recipients</th>
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Open Rate</th>
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Click Rate</th>
-                  <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400 text-right">Revenue</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-sand-200">
-                {campaigns.map((c) => (
-                  <tr key={c.id} className="hover:bg-cream-100 transition-colors">
-                    <td className="px-6 py-4">
-                      <p className="font-medium text-charcoal-700 max-w-xs truncate">{c.name}</p>
-                      <p className="text-xs text-charcoal-400 mt-0.5 capitalize">{c.status}</p>
-                    </td>
-                    <td className="px-6 py-4 text-charcoal-500">{formatDate(c.sentAt)}</td>
-                    <td className="px-6 py-4 text-charcoal-700 font-medium">{c.totalSent.toLocaleString()}</td>
-                    <td className="px-6 py-4"><RateBar value={c.openRate} /></td>
-                    <td className="px-6 py-4"><RateBar value={c.clickRate} /></td>
-                    <td className="px-6 py-4 text-right font-medium text-olive-500">
-                      {revenue(c.attributedRevenue, c.currency)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
+      {activeView === 'flows' && <EmailFlows useRealData={useRealData} />}
+      {activeView === 'campaigns' && <EmailCampaigns useRealData={useRealData} />}
+      {activeView === 'deliverability' && <EmailDeliverability useRealData={useRealData} />}
+      {activeView === 'engagement' && <EmailEngagementRecency />}
+      {activeView === 'attribution' && <EmailStageAttribution onNavigateToJourney={onNavigateToJourney} />}
     </section>
   )
 }

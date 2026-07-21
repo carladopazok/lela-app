@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, Fragment } from 'react'
 import {
-  ChevronRight, ExternalLink, CheckCircle2, Loader2, AlertCircle, ZoomIn, ZoomOut,
+  ChevronRight, ArrowRight, ExternalLink, CheckCircle2, Loader2, AlertCircle, ZoomIn, ZoomOut,
   AlertTriangle, Info, Star, Mail, MessageSquare, RefreshCw,
 } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
@@ -19,7 +19,76 @@ import {
   type JourneyStage,
   type JourneyAutomation,
 } from '@/lib/journey'
+import { LIFECYCLE_STAGE_META, type LifecycleStage } from '@/lib/segmentation'
+import { ILLUSTRATIVE_ATTRIBUTION_EXAMPLES } from '@/lib/email-performance-demo'
 import type { EnrichedCustomer } from '@/types'
+
+interface RealTransition {
+  customerId: number
+  oldStage: LifecycleStage | null
+  newStage: LifecycleStage
+  changedAt: string
+  matchedFlow: string | null
+}
+
+function StagePill({ stage }: { stage: LifecycleStage }) {
+  const meta = LIFECYCLE_STAGE_META[stage]
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${meta.bg} ${meta.text} ${meta.border}`}>
+      {stage}
+    </span>
+  )
+}
+
+// Compact companion to Email Performance's full Stage Attribution tab — same
+// data source (/api/customer-stage-history), same real/illustrative split,
+// condensed to a summary since the full detail lives one click away.
+function StageAttributionCard({ onNavigateToEmailAttribution }: { onNavigateToEmailAttribution?: () => void }) {
+  const [transitions, setTransitions] = useState<RealTransition[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/customer-stage-history')
+      .then((r) => r.json())
+      .then((d) => setTransitions(d.transitions ?? []))
+      .catch(() => setTransitions([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const example = ILLUSTRATIVE_ATTRIBUTION_EXAMPLES[0]
+
+  return (
+    <div className="bg-white rounded-2xl shadow-card px-5 py-4 mb-3">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400">Stage-to-Flow Attribution</p>
+        {onNavigateToEmailAttribution && (
+          <button
+            onClick={onNavigateToEmailAttribution}
+            className="inline-flex items-center gap-1 text-xs font-medium text-terracotta-600 hover:text-terracotta-700 transition-colors flex-shrink-0"
+          >
+            View full detail in Email Performance <ExternalLink size={11} />
+          </button>
+        )}
+      </div>
+      {loading ? (
+        <p className="text-sm text-charcoal-400">Loading…</p>
+      ) : transitions.length > 0 ? (
+        <p className="text-sm text-charcoal-700">
+          <strong>{transitions.length}</strong> real stage transition{transitions.length === 1 ? '' : 's'} recorded ·{' '}
+          <strong>{transitions.filter((t) => t.matchedFlow).length}</strong> matched to an active flow
+        </p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-charcoal-400 italic">Illustrative —</span>
+          <StagePill stage={example.oldStage} />
+          <ArrowRight size={12} className="text-charcoal-300" />
+          <StagePill stage={example.newStage} />
+          <span className="text-charcoal-500">via {example.matchedFlow}</span>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // Stages with a 0-count diagnostic — surfaces likely mis-configured segment triggers
 // rather than letting an empty column read as "nothing to see here".
@@ -218,7 +287,13 @@ const ZOOM_MIN = 0.5
 const ZOOM_MAX = 1.5
 const ZOOM_STEP = 0.1
 
-export default function CustomerJourney({ customers }: { customers: EnrichedCustomer[] }) {
+export default function CustomerJourney({
+  customers,
+  onNavigateToEmailAttribution,
+}: {
+  customers: EnrichedCustomer[]
+  onNavigateToEmailAttribution?: () => void
+}) {
   const [contactCount, setContactCount] = useState(0)
   const [contactsLoading, setContactsLoading] = useState(true)
   const [activeAutomation, setActiveAutomation] = useState<JourneyAutomation | null>(null)
@@ -338,6 +413,8 @@ export default function CustomerJourney({ customers }: { customers: EnrichedCust
           )}
         </div>
       )}
+
+      <StageAttributionCard onNavigateToEmailAttribution={onNavigateToEmailAttribution} />
 
       <div className="overflow-x-auto pb-4">
         <div className="flex items-start min-w-max" style={{ zoom }}>

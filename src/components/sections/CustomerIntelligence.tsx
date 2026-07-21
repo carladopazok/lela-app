@@ -614,11 +614,17 @@ export default function CustomerIntelligence({
   onOpenCustomerHandled,
   onNavigateToTicket,
   onNavigateToProduct,
+  initialView,
+  onInitialViewHandled,
+  onNavigateToEmailAttribution,
 }: {
   openCustomerEmail?: string | null
   onOpenCustomerHandled?: () => void
   onNavigateToTicket?: (ticketId: string) => void
   onNavigateToProduct?: (productId: number) => void
+  initialView?: 'journey' | null
+  onInitialViewHandled?: () => void
+  onNavigateToEmailAttribution?: () => void
 } = {}) {
   const [customers, setCustomers] = useState<EnrichedCustomer[]>([])
   const [customTagTypes, setCustomTagTypes] = useState<string[]>([])
@@ -691,6 +697,12 @@ export default function CustomerIntelligence({
     }
     onOpenCustomerHandled?.()
   }, [openCustomerEmail, loading, customers, onOpenCustomerHandled])
+
+  useEffect(() => {
+    if (!initialView) return
+    setActiveView(initialView)
+    onInitialViewHandled?.()
+  }, [initialView, onInitialViewHandled])
 
   const ticketsByEmail = useMemo(() => {
     const map = new Map<string, CSTicket[]>()
@@ -969,7 +981,7 @@ export default function CustomerIntelligence({
       )}
 
       {!loading && !error && activeView === 'journey' && (
-        <CustomerJourney customers={customers} />
+        <CustomerJourney customers={customers} onNavigateToEmailAttribution={onNavigateToEmailAttribution} />
       )}
 
       {!loading && !error && activeView === 'customers' && (

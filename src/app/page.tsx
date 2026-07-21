@@ -21,6 +21,8 @@ export default function Home() {
   const [openProductId, setOpenProductId] = useState<number | null>(null)
   const [productsFilter, setProductsFilter] = useState<'soldout' | 'stalled' | null>(null)
   const [productsSort, setProductsSort] = useState<'bestselling' | null>(null)
+  const [customerIntelInitialView, setCustomerIntelInitialView] = useState<'journey' | null>(null)
+  const [emailPerfInitialView, setEmailPerfInitialView] = useState<'attribution' | null>(null)
 
   // Tracks whether the current tab was reached via a "See in detail"-style link from Sales
   // Overview, so that tab can offer a way back. Cleared on any other navigation (sidebar click
@@ -63,6 +65,16 @@ export default function Home() {
     goToSection('sales-overview')
   }
 
+  function goToCustomerJourney() {
+    setCustomerIntelInitialView('journey')
+    goToSection('customer-intelligence')
+  }
+
+  function goToEmailAttribution() {
+    setEmailPerfInitialView('attribution')
+    goToSection('email-performance')
+  }
+
   return (
     <DummyDataProvider>
       <div className="flex min-h-screen bg-cream-100">
@@ -94,13 +106,22 @@ export default function Home() {
                 onBackToSalesOverview={cameFromSalesOverview ? goBackToSalesOverview : undefined}
               />
             )}
-            {active === 'email-performance'     && <EmailPerformance />}
+            {active === 'email-performance'     && (
+              <EmailPerformance
+                initialView={emailPerfInitialView}
+                onInitialViewHandled={() => setEmailPerfInitialView(null)}
+                onNavigateToJourney={goToCustomerJourney}
+              />
+            )}
             {active === 'customer-intelligence' && (
               <CustomerIntelligence
                 openCustomerEmail={openCustomerEmail}
                 onOpenCustomerHandled={() => setOpenCustomerEmail(null)}
                 onNavigateToTicket={goToTicket}
                 onNavigateToProduct={goToProduct}
+                initialView={customerIntelInitialView}
+                onInitialViewHandled={() => setCustomerIntelInitialView(null)}
+                onNavigateToEmailAttribution={goToEmailAttribution}
               />
             )}
             {active === 'customer-service' && (

@@ -23,11 +23,38 @@ function datedHeaders() {
   }
 }
 
+// Omnisend's dated API returns RFC7807 "problem+json" errors ({type, title,
+// detail, retryAfter, errors}) — surface `detail` (+ a human retry hint, +
+// any per-field validation messages) as a plain sentence instead of dumping
+// the raw JSON blob, which is what callers otherwise show verbatim in the UI.
+// Falls back to the raw text for any shape that doesn't match.
+async function parseOmnisendError(res: Response): Promise<string> {
+  const text = await res.text()
+  try {
+    const body = JSON.parse(text) as { detail?: string; retryAfter?: number; errors?: { message?: string }[] }
+    if (body.detail) {
+      const retryHint = body.retryAfter ? ` (try again in ${formatRetryAfter(body.retryAfter)})` : ''
+      const fieldMessages = (body.errors ?? []).map((e) => e.message).filter(Boolean)
+      const fieldHint = fieldMessages.length > 0 ? ` — ${fieldMessages.join('; ')}` : ''
+      return `${body.detail}${retryHint}${fieldHint}`
+    }
+  } catch {
+    // not JSON, or not the expected shape — fall through to raw text
+  }
+  return text
+}
+
+function formatRetryAfter(seconds: number): string {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.round((seconds % 3600) / 60)
+  return hours > 0 ? `~${hours}h ${minutes}m` : `~${minutes}m`
+}
+
 export async function omnisendDatedGet<T>(path: string, params?: Record<string, string>): Promise<T> {
   const url = new URL(`${DATED_BASE}${path}`)
   if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
   const res = await fetch(url.toString(), { headers: datedHeaders(), cache: 'no-store' })
-  if (!res.ok) throw new Error(`Omnisend ${res.status}: ${await res.text()}`)
+  if (!res.ok) throw new Error(`Omnisend ${res.status}: ${await parseOmnisendError(res)}`)
   return res.json()
 }
 
@@ -38,7 +65,7 @@ export async function omnisendDatedPost<T>(path: string, body: unknown): Promise
     body: JSON.stringify(body),
     cache: 'no-store',
   })
-  if (!res.ok) throw new Error(`Omnisend ${res.status}: ${await res.text()}`)
+  if (!res.ok) throw new Error(`Omnisend ${res.status}: ${await parseOmnisendError(res)}`)
   return res.json()
 }
 
@@ -109,6 +136,76 @@ export async function countOmnisendContacts(): Promise<number> {
   }
 
   return total
+}
+
+// ─── Analytics reports (dated API) ──────────────────────────────────────────
+// Verified 2026-07-21 against a live account: POST /analytics/reports accepts
+// the existing API key (ApiKeyAuth is a valid alternative to the documented
+// OAuth2 `analytics.read` scope). Metric/interval/dimension names below were
+// discovered from the API's own validation error messages (it lists allowed
+// values when given an invalid one), since the public docs page didn't expose
+// them. Confirmed working metrics: sent, sentCost, opened, openedUnique,
+// openRate, clicked, clickedUnique, clickRate, failed, failRate,
+// markedAsSpamUnique, markedAsSpamRate, unsubscribedUnique, unsubscribeRate,
+// attributedOrders, attributedOrdersUnique, attributedOrderRate,
+// attributedRevenue, attributedRevenuePerOrder, attributedRevenuePerSent,
+// totalOrders, totalRevenue. Confirmed intervals: last7Days, last30Days,
+// last90Days, custom, thisWeek, lastWeek, thisMonth, lastMonth, lastYear,
+// thisYear. `timestamp` dimension granularity must be week/month (not day)
+// when interval spans more than ~30 days. No per-campaign/per-automation
+// breakdown dimension found yet (channel/activity and other guesses all
+// rejected) — this only supports account-wide aggregates for now.
+export interface AnalyticsReportQuery {
+  alias: string
+  metrics: { name: string }[]
+  dateRange: { interval: string; from?: string; to?: string }
+  dimensions?: { name: string; granularity?: string }[]
+  filters?: { name: string; operator: 'in' | 'notIn'; values: string[] }[]
+}
+
+export interface AnalyticsReportResult {
+  alias: string
+  dimensions: { name: string; granularity?: string }[]
+  metrics: { name: string }[]
+  rows: Record<string, string | number>[]
+}
+
+export async function omnisendAnalyticsReport(queries: AnalyticsReportQuery[]): Promise<AnalyticsReportResult[]> {
+  const data = await omnisendDatedPost<{ reports: AnalyticsReportResult[] }>('/analytics/reports', { queries })
+  return data.reports
+}
+
+// Per-workflow breakdown: confirmed 2026-07-21 via Omnisend support (not
+// documented publicly) — dimension `marketingActivityID`, optionally paired
+// with a `marketingActivityType: ["Automation"]` filter to exclude campaigns.
+// Unverified end-to-end against a live response (discovered right as this
+// account hit its daily analytics rate limit) — if the filter shape below
+// turns out wrong, the route calling this will surface the API's error
+// message rather than fail silently.
+export const MARKETING_ACTIVITY_ID_DIMENSION = 'marketingActivityID'
+export const MARKETING_ACTIVITY_TYPE_FILTER = 'marketingActivityType'
+
+// ─── Automations (workflow structure — real name/steps/subject lines) ──────
+export interface OmnisendAutomationBlock {
+  id: string
+  type: string
+  delay?: { mode: string; duration: { units: string; amount: number } }
+  action?: { type: string; sendEmail?: { contentID: string; subject: string; senderEmail?: string; senderName?: string } }
+}
+
+export interface OmnisendAutomation {
+  id: string
+  name: string
+  isEnabled: boolean
+  blocks: OmnisendAutomationBlock[]
+  createdAt: string
+  updatedAt?: string
+  enabledAt?: string
+}
+
+export async function omnisendListAutomations(): Promise<OmnisendAutomation[]> {
+  const data = await omnisendDatedGet<{ automations: OmnisendAutomation[] }>('/automations')
+  return data.automations ?? []
 }
 
 export async function omnisendFindOrCreateContact(email: string): Promise<OmnisendContactResult> {

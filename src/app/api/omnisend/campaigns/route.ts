@@ -31,6 +31,9 @@ export async function GET() {
         totalSent: total,
         openRate: total > 0 ? opened / total : null,
         clickRate: total > 0 ? clicked / total : null,
+        bounced: c.bounced ?? 0,
+        complained: c.complained ?? 0,
+        unsubscribed: c.unsubscribed ?? 0,
         attributedRevenue: null,  // not available in campaigns list endpoint
         currency: 'USD',
       }
