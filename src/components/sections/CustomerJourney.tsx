@@ -14,11 +14,14 @@ import {
   STAGE_TRANSITION_RULES,
   OMNISEND_AUTOMATIONS_URL,
   OMNISEND_CAMPAIGNS_URL,
+  omnisendAutomationEditUrl,
+  JOURNEY_AUTOMATION_OMNISEND_NAMES,
   computeJourneyCounts,
   groupCustomersByStage,
   type JourneyStage,
   type JourneyAutomation,
 } from '@/lib/journey'
+import type { AutomationSummary } from '@/app/api/omnisend/automations/route'
 import { LIFECYCLE_STAGE_META, type LifecycleStage } from '@/lib/segmentation'
 import { ILLUSTRATIVE_ATTRIBUTION_EXAMPLES } from '@/lib/email-performance-demo'
 import type { EnrichedCustomer } from '@/types'
@@ -108,6 +111,10 @@ function audienceForAutomation(
   return stageAudiences[automation.stage] ?? []
 }
 
+function normalizeAutomationName(name: string): string {
+  return name.trim().toLowerCase()
+}
+
 function ChannelBadge({ channel }: { channel: JourneyAutomation['channel'] }) {
   const Icon = channel === 'SMS' ? MessageSquare : Mail
   return (
@@ -126,9 +133,11 @@ interface CreateCampaignResult {
 function AutomationCard({
   automation,
   onCreate,
+  realAutomationId,
 }: {
   automation: JourneyAutomation
   onCreate: (automation: JourneyAutomation) => void
+  realAutomationId?: string
 }) {
   return (
     <div className={`bg-white rounded-2xl shadow-card p-4 ${automation.priority ? 'border-2 border-terracotta-300' : ''}`}>
@@ -163,9 +172,10 @@ function AutomationCard({
       )}
       {automation.active ? (
         <a
-          href={OMNISEND_AUTOMATIONS_URL}
+          href={realAutomationId ? omnisendAutomationEditUrl(realAutomationId) : OMNISEND_AUTOMATIONS_URL}
           target="_blank"
           rel="noopener noreferrer"
+          title={realAutomationId ? undefined : "Exact automation not found in your Omnisend account yet — opens the automations list instead"}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-sand-300 text-charcoal-700 hover:bg-cream-100 text-xs font-medium transition-colors"
         >
           <ExternalLink size={12} /> View
@@ -302,6 +312,7 @@ export default function CustomerJourney({
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState<{ checked: number; changed: number; errors: { customerId: number; email: string; error: string }[] } | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
+  const [realAutomationIds, setRealAutomationIds] = useState<Map<string, string>>(new Map())
 
   async function syncStages() {
     setSyncing(true)
@@ -341,7 +352,40 @@ export default function CustomerJourney({
     return () => { cancelled = true }
   }, [])
 
+  // Best-effort: resolves each active automation card's "View" link to the real
+  // Omnisend workflow by matching names, so cards self-upgrade from the generic
+  // automations-list link as more of the real account's automations go live.
+  // Silent on failure — this only improves a link, it shouldn't block the page.
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/omnisend/automations')
+      .then((res) => (res.ok ? res.json() : { automations: [] }))
+      .then((data: { automations?: AutomationSummary[] }) => {
+        if (cancelled) return
+        const map = new Map<string, string>()
+        for (const a of data.automations ?? []) {
+          if (a.isEnabled) map.set(normalizeAutomationName(a.name), a.id)
+        }
+        setRealAutomationIds(map)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
   const counts = useMemo(() => computeJourneyCounts(customers, contactCount), [customers, contactCount])
+
+  // JourneyAutomation.id -> real Omnisend automation id, for automations with a
+  // declared correspondence (JOURNEY_AUTOMATION_OMNISEND_NAMES) whose real
+  // workflow was actually found in the account.
+  const resolvedAutomationIds = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const automation of JOURNEY_AUTOMATIONS) {
+      const realName = JOURNEY_AUTOMATION_OMNISEND_NAMES[automation.id]
+      const realId = realName ? realAutomationIds.get(normalizeAutomationName(realName)) : undefined
+      if (realId) map.set(automation.id, realId)
+    }
+    return map
+  }, [realAutomationIds])
 
   // Which customers belong to each stage, for the "Create" flow's audience. Lead has
   // no order history to classify by, so it falls back to Shopify customer records
@@ -461,7 +505,12 @@ export default function CustomerJourney({
                   </div>
                   <div className="flex flex-col gap-3">
                     {automations.map((automation) => (
-                      <AutomationCard key={automation.id} automation={automation} onCreate={setActiveAutomation} />
+                      <AutomationCard
+                        key={automation.id}
+                        automation={automation}
+                        onCreate={setActiveAutomation}
+                        realAutomationId={resolvedAutomationIds.get(automation.id)}
+                      />
                     ))}
                   </div>
                 </div>

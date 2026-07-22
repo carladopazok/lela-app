@@ -111,6 +111,24 @@ export const LEAD_SOURCE_BREAKDOWN: { source: string; pct: number }[] = [
 export const OMNISEND_AUTOMATIONS_URL = 'https://app.omnisend.com/#/automation'
 export const OMNISEND_CAMPAIGNS_URL = 'https://app.omnisend.com/#/campaigns/create'
 
+// Confirmed against a live login (2026-07-22) — unlike the generic list-page link
+// above, this opens one specific workflow. Only usable once the automation's real
+// Omnisend id has been resolved (see CustomerJourney.tsx); falls back to
+// OMNISEND_AUTOMATIONS_URL otherwise.
+export function omnisendAutomationEditUrl(automationId: string): string {
+  return `https://app.omnisend.com/automation/edit/${automationId}`
+}
+
+// Maps a JourneyAutomation's id to the exact name of its real Omnisend automation,
+// once one exists — e.g. the real workflow is just named "Welcome" in Omnisend,
+// not "Welcome series". Deliberately explicit and hand-maintained rather than
+// fuzzy/substring name-matching: guessing at a match risks linking to the wrong
+// workflow, where an honest fallback to the generic automations list does not.
+// Add an entry here whenever a new automation goes live in Omnisend.
+export const JOURNEY_AUTOMATION_OMNISEND_NAMES: Partial<Record<string, string>> = {
+  'welcome-series': 'Welcome',
+}
+
 // Plain-language transition rules — 'New' through 'Lost' are pulled directly from
 // the shared classifier (src/lib/segmentation.ts) so this copy can't drift out of
 // sync with the real thresholds; 'Pre-Purchase'/'Lead' get their own text since

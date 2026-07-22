@@ -30,13 +30,18 @@ export interface DemoFlow {
   diagnosticNote?: string
 }
 
-// Names deliberately echo the `active: true` entries in src/lib/journey.ts's
-// JOURNEY_AUTOMATIONS, so the two tabs read as one system — the figures here
-// are independently modeled, not derived from journey.ts's own stub numbers.
+// One DemoFlow per `active: true` entry in src/lib/journey.ts's JOURNEY_AUTOMATIONS
+// — same id, same name, same stage — so a flow card here and an automation card
+// on the Journey tab are always the same email, never just similarly named. That
+// means every active stage there (Lead, New, Active, Winback, Loyal, VIP, Lapsed,
+// Lost) has a matching flow here; Pre-Purchase and At Risk have none, on either
+// tab, since journey.ts has no active automation for those stages either — an
+// honest gap, not a missing flow. The per-email funnel figures below are
+// independently modeled, not derived from journey.ts's own revenuePerRecipient stubs.
 export const DEMO_FLOWS: DemoFlow[] = [
   {
     id: 'welcome-series',
-    name: 'Welcome Series',
+    name: 'Welcome series',
     stage: 'Lead',
     emails: [
       { name: 'Welcome + 10% off', entered: 1180, opened: 672, clicked: 218, converted: 71, revenue: 1775 },
@@ -45,36 +50,98 @@ export const DEMO_FLOWS: DemoFlow[] = [
     ],
   },
   {
-    id: 'post-purchase-care',
-    name: 'Post-Purchase Care',
+    id: 'first-purchase-offer',
+    name: 'First purchase offer',
+    stage: 'Lead',
+    emails: [
+      { name: "10% off your first order", entered: 900, opened: 410, clicked: 132, converted: 47, revenue: 1175 },
+    ],
+  },
+  {
+    id: 'post-purchase',
+    name: 'Post-purchase',
     stage: 'New',
     emails: [
       { name: 'Care guide & what to expect', entered: 2050, opened: 1168, clicked: 287, converted: 0, revenue: 0 },
+    ],
+  },
+  {
+    id: 'review-request',
+    name: 'Review request',
+    stage: 'New',
+    emails: [
       { name: 'Loved it? Leave a review + 10% off', entered: 2050, opened: 902, clicked: 241, converted: 96, revenue: 2304 },
     ],
   },
   {
     id: 'cross-sell-campaign',
-    name: 'Cross-Sell Campaign',
+    name: 'Cross-sell campaign',
     stage: 'Active',
     emails: [
       { name: 'Complete the set', entered: 640, opened: 358, clicked: 121, converted: 52, revenue: 2080 },
     ],
   },
   {
-    id: 'winback-sequence',
-    name: 'Winback Sequence',
+    id: 'anniversary-flow',
+    name: 'Anniversary flow',
+    stage: 'Active',
+    emails: [
+      { name: 'One year with us — a gift inside', entered: 410, opened: 246, clicked: 89, converted: 38, revenue: 1710 },
+    ],
+  },
+  {
+    id: 'winback-day-60',
+    name: 'Winback day 60',
     stage: 'Winback',
     emails: [
       { name: "We miss you — 15% back (day 60)", entered: 890, opened: 285, clicked: 42, converted: 9, revenue: 225 },
+    ],
+  },
+  {
+    id: 'winback-day-75',
+    name: 'Winback day 75',
+    stage: 'Winback',
+    emails: [
       { name: 'Last call before we let go (day 75)', entered: 860, opened: 189, clicked: 31, converted: 7, revenue: 175 },
     ],
     diagnosticNote:
-      "Open rate drops from 32% on email 1 to 22% on email 2 — a steeper step-down than any other flow. Email 1 alone underperforms Welcome Series' first email by roughly half.",
+      "Open rate is 22% — down from 32% on the day-60 email, a steeper step-down than any other flow pair. This email alone underperforms Welcome series' first email by roughly half.",
+  },
+  {
+    id: 'community-invite',
+    name: 'Community invite',
+    stage: 'Loyal',
+    emails: [
+      { name: 'Join the Lela community', entered: 380, opened: 201, clicked: 64, converted: 18, revenue: 540 },
+    ],
+  },
+  {
+    id: 'early-access',
+    name: 'Early access',
+    stage: 'VIP',
+    emails: [
+      { name: '48-hour early access, just for you', entered: 145, opened: 118, clicked: 71, converted: 34, revenue: 3060 },
+    ],
+  },
+  {
+    id: 'personal-thank-you',
+    name: 'Personal thank you',
+    stage: 'VIP',
+    emails: [
+      { name: 'A thank-you from us, personally', entered: 60, opened: 54, clicked: 21, converted: 9, revenue: 990 },
+    ],
+  },
+  {
+    id: 'ambassador-invite',
+    name: 'Ambassador invite',
+    stage: 'VIP',
+    emails: [
+      { name: "You're invited: Lela Ambassador Program", entered: 60, opened: 45, clicked: 19, converted: 6, revenue: 540 },
+    ],
   },
   {
     id: 'reactivation-sequence',
-    name: 'Reactivation Sequence',
+    name: 'Reactivation sequence',
     stage: 'Lapsed',
     emails: [
       { name: "It's been a while — 15% on us", entered: 510, opened: 214, clicked: 58, converted: 19, revenue: 760 },
@@ -82,11 +149,11 @@ export const DEMO_FLOWS: DemoFlow[] = [
     ],
   },
   {
-    id: 'early-access',
-    name: 'Early Access',
-    stage: 'VIP',
+    id: 'sunset-flow',
+    name: 'Sunset flow',
+    stage: 'Lost',
     emails: [
-      { name: '48-hour early access, just for you', entered: 145, opened: 118, clicked: 71, converted: 34, revenue: 3060 },
+      { name: 'Before we go quiet', entered: 320, opened: 96, clicked: 12, converted: 2, revenue: 60 },
     ],
   },
 ]
@@ -238,8 +305,8 @@ const HEALTHY_STAGES: LifecycleStage[] = ['New', 'Active', 'Loyal', 'VIP']
 // targets that stage — an honest gap, not filled in with a fake match. Kept
 // deliberately small: only the stages the demo flows above actually target.
 const STAGE_RECOVERY_FLOW_MAP: Partial<Record<LifecycleStage, string | null>> = {
-  Winback: 'Winback Sequence',
-  Lapsed: 'Reactivation Sequence',
+  Winback: 'Winback day 60',
+  Lapsed: 'Reactivation sequence',
   'At Risk': null, // journey.ts's `re-engagement-nudge` automation exists but is inactive
   Lost: null,
 }
@@ -272,7 +339,7 @@ export const ILLUSTRATIVE_ATTRIBUTION_EXAMPLES: StageFlowAttributionExample[] = 
     oldStage: 'Winback',
     newStage: 'Active',
     changedAtLabel: '2026-06-14',
-    matchedFlow: 'Winback Sequence',
+    matchedFlow: 'Winback day 60',
     note: 'Placed a second order 9 days after the day-60 email; the day-75 follow-up never went out.',
   },
   {
@@ -280,7 +347,7 @@ export const ILLUSTRATIVE_ATTRIBUTION_EXAMPLES: StageFlowAttributionExample[] = 
     oldStage: 'Lapsed',
     newStage: 'Loyal',
     changedAtLabel: '2026-05-30',
-    matchedFlow: 'Reactivation Sequence',
+    matchedFlow: 'Reactivation sequence',
     note: 'Converted on email 1 using the 15% code.',
   },
   {
