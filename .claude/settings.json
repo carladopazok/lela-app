@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"soldOutProducts.map\\(\\(p, i\\) => {\" \"/Users/carladopazo/Documents/lela app/src/components/sections/ProductsInventory.tsx\")",
+      "Bash(grep -n \"stalledDetailList.map\\(\\(p, i\\) => {\" \"/Users/carladopazo/Documents/lela app/src/components/sections/ProductsInventory.tsx\")"
+    ]
+  }
+}
