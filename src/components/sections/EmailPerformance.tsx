@@ -33,7 +33,7 @@ export default function EmailPerformance({
   onInitialViewHandled,
   onNavigateToJourney,
 }: {
-  initialView?: 'attribution' | null
+  initialView?: 'attribution' | 'deliverability' | null
   onInitialViewHandled?: () => void
   onNavigateToJourney?: () => void
 }) {

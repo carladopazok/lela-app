@@ -1,12 +1,16 @@
 'use client'
 
 import { useState } from 'react'
-import { TrendingUp, PackageX, Mail, Users, Info, HeadphonesIcon, LineChart, Sparkles, CheckCircle2, AlertCircle, Boxes, ListTodo } from 'lucide-react'
+import { TrendingUp, PackageX, Mail, Users, HeadphonesIcon, LineChart, Sparkles, CheckCircle2, AlertCircle, Boxes, ListTodo, Bell } from 'lucide-react'
 import { useDummyData } from '@/lib/dummy-data-context'
 
-export type SectionId = 'sales-overview' | 'late-shipments' | 'products-inventory' | 'email-performance' | 'customer-intelligence' | 'customer-service' | 'forecast' | 'pending-work' | 'about'
+export type SectionId = 'attention-feed' | 'sales-overview' | 'late-shipments' | 'products-inventory' | 'email-performance' | 'customer-intelligence' | 'customer-service' | 'forecast' | 'pending-work' | 'about'
 
+// Main nav — Pending Work is rendered separately below, set apart at the bottom of the
+// nav column. About This Tool lives outside the nav entirely, as a small link under the
+// wordmark (see the header block in the component below).
 const NAV_ITEMS: { id: SectionId; label: string; Icon: React.ElementType }[] = [
+  { id: 'attention-feed',        label: 'Attention Feed',       Icon: Bell },
   { id: 'sales-overview',        label: 'Sales Overview',       Icon: TrendingUp },
   { id: 'late-shipments',        label: 'Late Shipments',       Icon: PackageX },
   { id: 'products-inventory',    label: 'Products & Inventory', Icon: Boxes },
@@ -14,8 +18,6 @@ const NAV_ITEMS: { id: SectionId; label: string; Icon: React.ElementType }[] = [
   { id: 'customer-intelligence', label: 'Customer Intelligence',Icon: Users },
   { id: 'customer-service',      label: 'Customer Service',     Icon: HeadphonesIcon },
   { id: 'forecast',              label: 'Revenue Forecast',     Icon: LineChart },
-  { id: 'about',                 label: 'About This Tool',      Icon: Info },
-  { id: 'pending-work',          label: 'Pending Work',         Icon: ListTodo },
 ]
 
 interface SidebarProps {
@@ -48,14 +50,24 @@ export default function Sidebar({ active, onSelect }: SidebarProps) {
 
   return (
     <aside className="fixed top-0 left-0 h-screen w-60 bg-olive-700 flex flex-col z-20">
-      {/* Wordmark */}
-      <div className="px-6 pt-8 pb-6 border-b border-olive-600">
+      {/* Wordmark — flex-shrink-0 so it (and "About This Tool") never gets squeezed or
+          pushed off-screen by a long nav list; only the nav list itself scrolls. */}
+      <div className="px-6 pt-8 pb-6 border-b border-olive-600 flex-shrink-0">
         <h1 className="font-serif text-2xl text-cream-100 tracking-tight">Lela</h1>
         <p className="text-xs text-olive-200 mt-1 font-sans">Store Dashboard</p>
+        <button
+          onClick={() => onSelect('about')}
+          className={`text-[11px] font-sans mt-2 transition-colors ${
+            active === 'about' ? 'text-white font-medium' : 'text-olive-100 hover:text-white'
+          }`}
+        >
+          About This Tool
+        </button>
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 px-3 py-5 flex flex-col gap-1">
+      {/* Nav — min-h-0 lets this flex item actually shrink instead of forcing the aside
+          to overflow; overflow-y-auto scrolls just this list when it runs long. */}
+      <nav className="flex-1 min-h-0 overflow-y-auto px-3 py-5 flex flex-col gap-1">
         {NAV_ITEMS.map(({ id, label, Icon }) => (
           <button
             key={id}
@@ -66,10 +78,22 @@ export default function Sidebar({ active, onSelect }: SidebarProps) {
             <span>{label}</span>
           </button>
         ))}
+
+        <div className="mt-4 pt-4 border-t border-olive-600">
+          <button
+            onClick={() => onSelect('pending-work')}
+            className={`flex items-center gap-3 px-4 py-2 rounded-lg text-xs font-medium transition-all duration-150 w-full text-left ${
+              active === 'pending-work' ? 'bg-terracotta-500 text-white' : 'text-olive-200 hover:bg-olive-600 hover:text-white'
+            }`}
+          >
+            <ListTodo size={13} strokeWidth={1.8} />
+            <span>Pending Work</span>
+          </button>
+        </div>
       </nav>
 
       {/* Footer */}
-      <div className="px-6 pb-7 pt-4 border-t border-olive-600">
+      <div className="px-6 pb-7 pt-4 border-t border-olive-600 flex-shrink-0">
         <button
           onClick={() => setIncludeDummy(!includeDummy)}
           className="flex items-center justify-between w-full mb-4 group"

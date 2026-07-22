@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Sidebar, { type SectionId } from '@/components/layout/Sidebar'
 import { DummyDataProvider } from '@/lib/dummy-data-context'
+import AttentionFeed from '@/components/sections/AttentionFeed'
 import LateShipments from '@/components/sections/LateShipments'
 import SalesOverview from '@/components/sections/SalesOverview'
 import ProductsInventory from '@/components/sections/ProductsInventory'
@@ -21,8 +22,8 @@ export default function Home() {
   const [openProductId, setOpenProductId] = useState<number | null>(null)
   const [productsFilter, setProductsFilter] = useState<'soldout' | 'stalled' | null>(null)
   const [productsSort, setProductsSort] = useState<'bestselling' | null>(null)
-  const [customerIntelInitialView, setCustomerIntelInitialView] = useState<'journey' | null>(null)
-  const [emailPerfInitialView, setEmailPerfInitialView] = useState<'attribution' | null>(null)
+  const [customerIntelInitialView, setCustomerIntelInitialView] = useState<'journey' | 'rfm' | null>(null)
+  const [emailPerfInitialView, setEmailPerfInitialView] = useState<'attribution' | 'deliverability' | null>(null)
 
   // Tracks whether the current tab was reached via a "See in detail"-style link from Sales
   // Overview, so that tab can offer a way back. Cleared on any other navigation (sidebar click
@@ -75,6 +76,32 @@ export default function Home() {
     goToSection('email-performance')
   }
 
+  function goToEmailDeliverability() {
+    setEmailPerfInitialView('deliverability')
+    goToSection('email-performance')
+  }
+
+  function goToCustomerIntelligenceRFM() {
+    setCustomerIntelInitialView('rfm')
+    goToSection('customer-intelligence')
+  }
+
+  function goToCustomerServiceInbox() {
+    goToSection('customer-service')
+  }
+
+  // Attention Feed is its own landing tab (not reached via Sales Overview), so its links
+  // navigate without the "Back to Sales Overview" affordance that goToProductsFiltered /
+  // the inline late-shipments callback set for links originating on that page.
+  function goToLateShipmentsFromFeed() {
+    goToSection('late-shipments')
+  }
+
+  function goToProductsFilteredFromFeed(filter: 'soldout' | 'stalled') {
+    setProductsFilter(filter)
+    goToSection('products-inventory')
+  }
+
   return (
     <DummyDataProvider>
       <div className="flex min-h-screen bg-cream-100">
@@ -82,6 +109,16 @@ export default function Home() {
 
         <main className="flex-1 ml-60 min-h-screen">
           <div className="max-w-7xl mx-auto px-10 py-12">
+            {active === 'attention-feed'         && (
+              <AttentionFeed
+                onGoToLateShipments={goToLateShipmentsFromFeed}
+                onGoToProductsFiltered={goToProductsFilteredFromFeed}
+                onGoToEmailDeliverability={goToEmailDeliverability}
+                onGoToCustomerIntelligenceRFM={goToCustomerIntelligenceRFM}
+                onGoToCustomerJourney={goToCustomerJourney}
+                onGoToCustomerService={goToCustomerServiceInbox}
+              />
+            )}
             {active === 'sales-overview'        && (
               <SalesOverview
                 onGoToLateShipments={() => goToSection('late-shipments', true)}

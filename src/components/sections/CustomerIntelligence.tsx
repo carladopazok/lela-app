@@ -623,7 +623,7 @@ export default function CustomerIntelligence({
   onOpenCustomerHandled?: () => void
   onNavigateToTicket?: (ticketId: string) => void
   onNavigateToProduct?: (productId: number) => void
-  initialView?: 'journey' | null
+  initialView?: 'journey' | 'rfm' | null
   onInitialViewHandled?: () => void
   onNavigateToEmailAttribution?: () => void
 } = {}) {
