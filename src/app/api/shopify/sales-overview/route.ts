@@ -44,17 +44,15 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Fetch shop currency and order count in parallel
-    const [shopResult, countResult] = await Promise.all([
-      shopify.get<{ shop: { currency: string } }>('/shop.json'),
-      shopify.get<{ count: number }>('/orders/count.json', {
-        status: 'any',
-        created_at_min: createdAtMin,
-        ...(createdAtMax ? { created_at_max: createdAtMax } : {}),
-      }),
-    ])
+    const countResult = await shopify.get<{ count: number }>('/orders/count.json', {
+      status: 'any',
+      created_at_min: createdAtMin,
+      ...(createdAtMax ? { created_at_max: createdAtMax } : {}),
+    })
 
-    const currency = shopResult.shop.currency
+    // Hardcoded: the dashboard always displays amounts in EUR, regardless of what
+    // Shopify's shop.json reports as the store's configured currency.
+    const currency = 'EUR'
     console.log(`[sales-overview] days=${days} endDaysAgo=${endDaysAgo} | created_at_min=${createdAtMin} | created_at_max=${createdAtMax ?? 'none'} | count: ${countResult.count} | currency: ${currency}`)
 
     // Fetch full orders — no fields restriction so nothing is silently dropped

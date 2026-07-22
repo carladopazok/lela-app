@@ -196,7 +196,9 @@ export async function GET(req: NextRequest) {
     const { primary_locale, country_code } = shopResult.shop
     const locale = primary_locale && country_code ? `${primary_locale}-${country_code}` : 'en-US'
 
-    return NextResponse.json({ products, currency: shopResult.shop.currency, locale, source, inventoryAvailable: source === 'catalog' })
+    // Hardcoded: the dashboard always displays amounts in EUR, regardless of what
+    // Shopify's shop.json reports as the store's configured currency.
+    return NextResponse.json({ products, currency: 'EUR', locale, source, inventoryAvailable: source === 'catalog' })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })

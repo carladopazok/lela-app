@@ -273,7 +273,7 @@ export default function LateShipments({
                       </span>
                     ))}
                   </td>
-                  <td className="px-6 py-4 text-right font-medium text-charcoal-700">${parseFloat(s.totalPrice).toFixed(2)}</td>
+                  <td className="px-6 py-4 text-right font-medium text-charcoal-700">€{parseFloat(s.totalPrice).toFixed(2)}</td>
                   <td className="px-6 py-4">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${STOCK_BADGE[s.stockStatus]}`}>
                       {STOCK_LABEL[s.stockStatus]}
