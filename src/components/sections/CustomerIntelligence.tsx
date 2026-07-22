@@ -54,6 +54,7 @@ const TICKET_STATUS_STYLES: Record<string, string> = {
   'needs attention': 'bg-amber-50 text-amber-700 border border-amber-200',
   archived:          'bg-sand-100 text-charcoal-500 border border-sand-300',
   resolved:          'bg-olive-100 text-olive-600 border border-olive-200',
+  spam:              'bg-red-50 text-red-600 border border-red-200',
 }
 
 // ─── Expanded row detail ──────────────────────────────────────────────────────

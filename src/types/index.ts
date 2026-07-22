@@ -170,7 +170,7 @@ export interface SalesMetrics {
 
 // ─── Customer Service ───────────────────────────────────────────────────────
 
-export type TicketStatus = 'open' | 'needs attention' | 'archived' | 'resolved'
+export type TicketStatus = 'open' | 'needs attention' | 'archived' | 'resolved' | 'spam'
 
 export const TICKET_TAGS = ['order issue', 'refund', 'shipping', 'product question', 'general', 'marketing messages'] as const
 export type TicketTag = string

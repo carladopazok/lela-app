@@ -4,10 +4,12 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   RefreshCw, AlertCircle, Mail, ArrowLeft, Send, Plus, Trash2,
   Edit2, Check, X, Loader2, Inbox, BookOpen, ChevronDown, ChevronLeft, ChevronRight, Tag, User,
+  ShieldAlert, Ban,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
+import { isLikelySpamSender } from '@/lib/spam-detection'
 import type { CSTicket, CSMacro, TicketStatus, TicketTag } from '@/types'
 import { TICKET_TAGS } from '@/types'
 
@@ -24,6 +26,7 @@ const STATUS_STYLES: Record<TicketStatus, string> = {
   'needs attention': 'bg-amber-50 text-amber-700 border border-amber-200',
   archived:          'bg-sand-100 text-charcoal-500 border border-sand-300',
   resolved:          'bg-olive-100 text-olive-600 border border-olive-200',
+  spam:              'bg-red-50 text-red-600 border border-red-200',
 }
 
 // ─── Ticket Detail ───────────────────────────────────────────────────────────
@@ -183,6 +186,11 @@ function TicketDetail({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {isLikelySpamSender(ticket.from) && ticket.status !== 'spam' && (
+            <span className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-600 border border-red-200">
+              <ShieldAlert size={12} /> Possible spam
+            </span>
+          )}
           <span className={`px-3 py-1 rounded-full text-xs font-medium capitalize ${STATUS_STYLES[ticket.status]}`}>
             {ticket.status}
           </span>
@@ -373,6 +381,12 @@ function TicketDetail({
                   className="px-4 py-2 text-sm font-medium text-amber-600 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition-colors"
                 >
                   Flag → Needs Attention
+                </button>
+                <button
+                  onClick={() => changeStatus('spam')}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-red-600 hover:text-red-800 bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl transition-colors"
+                >
+                  <Ban size={14} /> Mark as spam
                 </button>
               </div>
               <div className="flex items-center gap-2">
@@ -925,11 +939,22 @@ export default function CustomerService({
     setBulkMoving(false)
   }
 
+  async function quickMarkSpam(id: string) {
+    const res = await fetch(`/api/cs/tickets/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'spam' }),
+    })
+    const data = await res.json()
+    if (res.ok) setTickets((prev) => prev.map((t) => t.id === id ? data.ticket : t))
+  }
+
   const counts: Record<TicketStatus, number> = {
     open: tickets.filter((t) => t.status === 'open').length,
     'needs attention': tickets.filter((t) => t.status === 'needs attention').length,
     archived: tickets.filter((t) => t.status === 'archived').length,
     resolved: tickets.filter((t) => t.status === 'resolved').length,
+    spam: tickets.filter((t) => t.status === 'spam').length,
   }
 
   return (
@@ -1028,7 +1053,7 @@ export default function CustomerService({
               <div className="flex flex-col gap-3 mb-5">
                 <div className="flex items-center justify-between">
                   <div className="flex gap-1.5 items-center flex-wrap">
-                    {(['open', 'needs attention', 'archived', 'resolved'] as const).map((s) => (
+                    {(['open', 'needs attention', 'archived', 'resolved', 'spam'] as const).map((s) => (
                       <button
                         key={s}
                         onClick={() => { setStatusFilter(s); setSelectedIds(new Set()) }}
@@ -1060,8 +1085,8 @@ export default function CustomerService({
                     <span className="text-xs font-semibold text-terracotta-700 mr-1">
                       {selectedIds.size} selected — move to:
                     </span>
-                    {(['open', 'needs attention', 'archived', 'resolved'] as const)
-                      .filter((s) => s !== statusFilter)
+                    {(['open', 'needs attention', 'archived', 'resolved', 'spam'] as const)
+                      .filter((s) => s !== statusFilter && s !== 'spam')
                       .map((s) => (
                         <button
                           key={s}
@@ -1073,6 +1098,16 @@ export default function CustomerService({
                           {s}
                         </button>
                       ))}
+                    {statusFilter !== 'spam' && (
+                      <button
+                        onClick={() => bulkChangeStatus('spam')}
+                        disabled={bulkMoving || bulkDeleting}
+                        className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        {bulkMoving ? <Loader2 size={10} className="animate-spin" /> : <Ban size={10} />}
+                        Mark as spam
+                      </button>
+                    )}
                     <div className="ml-auto">
                       <button
                         onClick={bulkDelete}
@@ -1138,7 +1173,23 @@ export default function CustomerService({
                             />
                           </td>
                           <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
-                            <p className="font-medium text-charcoal-700">{t.fromName}</p>
+                            <p className="font-medium text-charcoal-700 flex items-center gap-1.5">
+                              {t.fromName}
+                              {isLikelySpamSender(t.from) && (
+                                <span title="Possible spam sender">
+                                  <ShieldAlert size={13} className="text-red-500 shrink-0" />
+                                </span>
+                              )}
+                              {isLikelySpamSender(t.from) && t.status !== 'spam' && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); quickMarkSpam(t.id) }}
+                                  title="Mark as spam"
+                                  className="text-red-400 hover:text-red-600 transition-colors"
+                                >
+                                  <Ban size={13} />
+                                </button>
+                              )}
+                            </p>
                             <p className="text-xs text-charcoal-400 mt-0.5">
                               <MaskedEmail
                                 email={t.from}
