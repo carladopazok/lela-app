@@ -933,7 +933,7 @@ export default function CustomerService({
   }
 
   return (
-    <section className="max-w-4xl">
+    <section className="max-w-6xl">
       {onBackToSalesOverview && (
         <button
           onClick={onBackToSalesOverview}
