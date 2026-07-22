@@ -162,6 +162,13 @@ export function classifyJourneyStage(customer: EnrichedCustomer): Exclude<Journe
   return stage as Exclude<LifecycleStage, 'Never Purchased'>
 }
 
+// Never-purchased Shopify customers who don't already have a recent abandoned
+// cart (those are counted under Pre-Purchase instead). This is the real,
+// known-customer floor for the Lead stage — see computeJourneyCounts.
+export function neverPurchasedLeadCustomers(customers: EnrichedCustomer[]): EnrichedCustomer[] {
+  return customers.filter((c) => c.orders_count === 0 && !hasRecentAbandonedCheckout(c.abandonedCheckouts))
+}
+
 export function computeJourneyCounts(
   customers: EnrichedCustomer[],
   omnisendContactCount: number
@@ -174,10 +181,13 @@ export function computeJourneyCounts(
 
   for (const c of buyers) counts[classifyJourneyStage(c)]++
 
-  // Approximation: doesn't match individual Omnisend contacts against Shopify
-  // emails, just diffs the two totals. Unverified against a live account's
-  // exact contact/customer overlap — iterate here if it reads oddly.
-  counts.Lead = Math.max(0, omnisendContactCount - buyers.length)
+  // Real known-customer floor: never-purchased Shopify customers (minus those
+  // already counted under Pre-Purchase) must always be represented in Lead, even
+  // if the Omnisend-diff approximation below undercounts them. The approximation
+  // itself doesn't match individual Omnisend contacts against Shopify emails,
+  // just diffs the two totals — unverified against a live account's exact
+  // contact/customer overlap, iterate here if it reads oddly.
+  counts.Lead = Math.max(neverPurchasedLeadCustomers(customers).length, omnisendContactCount - buyers.length)
 
   // Real data, using the same 14-day recency window as the Abandoned Checkout tag
   // (src/lib/segmentation.ts) — so this and the Customers-tab badge always agree.

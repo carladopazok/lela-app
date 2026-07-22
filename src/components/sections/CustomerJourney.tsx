@@ -6,6 +6,7 @@ import {
   AlertTriangle, Info, Star, Mail, MessageSquare, RefreshCw,
 } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
+import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import {
   JOURNEY_STAGE_ORDER,
   JOURNEY_STAGE_META,
@@ -18,6 +19,7 @@ import {
   JOURNEY_AUTOMATION_OMNISEND_NAMES,
   computeJourneyCounts,
   groupCustomersByStage,
+  neverPurchasedLeadCustomers,
   type JourneyStage,
   type JourneyAutomation,
 } from '@/lib/journey'
@@ -293,6 +295,53 @@ function CreateAutomationModal({
   )
 }
 
+// The real, known-customer subset of Lead — never-purchased Shopify customers
+// (see neverPurchasedLeadCustomers in journey.ts). Lets you actually see who's
+// behind the Lead count, since that headline number can include an Omnisend-only
+// approximation on top of this real list.
+function LeadListModal({ customers, onClose }: { customers: EnrichedCustomer[]; onClose: () => void }) {
+  const [hiddenEmailIds, setHiddenEmailIds] = useState<Set<number>>(new Set())
+
+  function toggleEmailVisibility(id: number) {
+    setHiddenEmailIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const allHidden = customers.length > 0 && customers.every((c) => hiddenEmailIds.has(c.id))
+
+  return (
+    <Modal open onClose={onClose} title="Lead — Never Purchased">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm text-charcoal-500">
+          <strong>{customers.length}</strong> customer{customers.length === 1 ? '' : 's'} registered but never purchased
+        </p>
+        <HideAllEmailsButton
+          allHidden={allHidden}
+          onClick={() => setHiddenEmailIds(allHidden ? new Set() : new Set(customers.map((c) => c.id)))}
+        />
+      </div>
+      <div className="max-h-96 overflow-y-auto -mx-6 px-6">
+        <ul className="divide-y divide-sand-100">
+          {customers.map((c) => (
+            <li key={c.id} className="py-2.5 flex items-center justify-between gap-3">
+              <span className="text-sm text-charcoal-700 font-medium truncate">{c.first_name} {c.last_name}</span>
+              <span className="text-xs text-charcoal-400 shrink-0">
+                <MaskedEmail email={c.email} hidden={hiddenEmailIds.has(c.id)} onToggle={() => toggleEmailVisibility(c.id)} />
+              </span>
+            </li>
+          ))}
+          {customers.length === 0 && (
+            <li className="py-8 text-center text-sm text-charcoal-400">No customers in this list yet.</li>
+          )}
+        </ul>
+      </div>
+    </Modal>
+  )
+}
+
 const ZOOM_MIN = 0.5
 const ZOOM_MAX = 1.5
 const ZOOM_STEP = 0.1
@@ -307,6 +356,7 @@ export default function CustomerJourney({
   const [contactCount, setContactCount] = useState(0)
   const [contactsLoading, setContactsLoading] = useState(true)
   const [activeAutomation, setActiveAutomation] = useState<JourneyAutomation | null>(null)
+  const [showLeadList, setShowLeadList] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [expandedRules, setExpandedRules] = useState<Set<JourneyStage>>(new Set())
   const [syncing, setSyncing] = useState(false)
@@ -387,13 +437,14 @@ export default function CustomerJourney({
     return map
   }, [realAutomationIds])
 
-  // Which customers belong to each stage, for the "Create" flow's audience. Lead has
-  // no order history to classify by, so it falls back to Shopify customer records
-  // with zero orders — a real, taggable subset, though smaller than the headline
-  // Lead count above (which also counts non-Shopify Omnisend contacts).
+  // Which customers belong to each stage, for the "Create" flow's audience. Lead
+  // uses the same real known-customer floor as the headline Lead count above
+  // (see neverPurchasedLeadCustomers in journey.ts) — still smaller than that
+  // count whenever the Omnisend-diff approximation is larger, since this audience
+  // only contains real Shopify customer records.
   const stageAudiences = useMemo(() => {
     const groups = groupCustomersByStage(customers)
-    return { Lead: customers.filter((c) => c.orders_count === 0), ...groups }
+    return { Lead: neverPurchasedLeadCustomers(customers), ...groups }
   }, [customers])
 
   return (
@@ -480,11 +531,20 @@ export default function CustomerJourney({
                       </button>
                     </div>
                     <p className="text-xs text-charcoal-500 mt-0.5 flex items-center gap-1">
-                      {stage === 'Lead' && contactsLoading
-                        ? '…'
-                        : stage === 'Pre-Purchase'
-                        ? `${counts[stage].toLocaleString()} with an abandoned cart`
-                        : `${counts[stage].toLocaleString()} customers`}
+                      {stage === 'Lead' && contactsLoading ? (
+                        '…'
+                      ) : stage === 'Lead' ? (
+                        <button
+                          onClick={() => setShowLeadList(true)}
+                          className="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-terracotta-600 transition-colors"
+                        >
+                          {counts[stage].toLocaleString()} customers · view list
+                        </button>
+                      ) : stage === 'Pre-Purchase' ? (
+                        `${counts[stage].toLocaleString()} with an abandoned cart`
+                      ) : (
+                        `${counts[stage].toLocaleString()} customers`
+                      )}
                       {DIAGNOSTIC_STAGES.includes(stage) && counts[stage] === 0 && (
                         <span title="0 customers — check segment trigger definitions" className="flex-shrink-0">
                           <AlertTriangle size={11} className="text-amber-600" />
@@ -531,6 +591,10 @@ export default function CustomerJourney({
           audience={audienceForAutomation(activeAutomation, customers, stageAudiences)}
           onClose={() => setActiveAutomation(null)}
         />
+      )}
+
+      {showLeadList && (
+        <LeadListModal customers={stageAudiences.Lead} onClose={() => setShowLeadList(false)} />
       )}
     </div>
   )

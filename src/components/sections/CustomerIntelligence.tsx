@@ -973,7 +973,7 @@ export default function CustomerIntelligence({
       )}
 
       {!loading && !error && activeView === 'rfm' && (
-        <RFMAnalysis customers={customers} />
+        <RFMAnalysis customers={customers} onNavigateToJourney={() => setActiveView('journey')} />
       )}
 
       {!loading && !error && activeView === 'segments' && (

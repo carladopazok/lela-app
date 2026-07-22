@@ -24,6 +24,12 @@ export const SEGMENT_ORDER: RFMSegment[] = [
   'Never Purchased',
 ]
 
+// Segments with a real RFM score — excludes 'Never Purchased', which is outside
+// RFM's mathematical scope (no recency/frequency/monetary to score). Used by the
+// RFM Analysis tab's distribution bar/legend/cards. Segments.tsx's "By Cohort"
+// filter still uses the full SEGMENT_ORDER so 'Never Purchased' stays filterable there.
+export const BUYER_SEGMENT_ORDER: RFMSegment[] = SEGMENT_ORDER.filter((s) => s !== 'Never Purchased')
+
 export const SEGMENT_META: Record<
   RFMSegment,
   {

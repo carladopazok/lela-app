@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { X } from 'lucide-react'
-import { computeRFM, cellSegment, SEGMENT_META, SEGMENT_ORDER } from '@/lib/rfm'
+import { computeRFM, cellSegment, SEGMENT_META, SEGMENT_ORDER, BUYER_SEGMENT_ORDER } from '@/lib/rfm'
 import TagBadge from '@/components/ui/TagBadge'
 import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import type { EnrichedCustomer } from '@/types'
@@ -41,7 +41,13 @@ function CategoryBadge({ tag }: { tag: string }) {
   )
 }
 
-export default function RFMAnalysis({ customers }: { customers: EnrichedCustomer[] }) {
+export default function RFMAnalysis({
+  customers,
+  onNavigateToJourney,
+}: {
+  customers: EnrichedCustomer[]
+  onNavigateToJourney?: () => void
+}) {
   const [selectedSegment, setSelectedSegment] = useState<RFMSegment | null>(null)
   const [hiddenEmailIds, setHiddenEmailIds] = useState<Set<number>>(new Set())
 
@@ -68,6 +74,8 @@ export default function RFMAnalysis({ customers }: { customers: EnrichedCustomer
   }, [scored])
 
   const total = customers.length
+  const neverPurchasedCount = counts.get('Never Purchased') ?? 0
+  const buyerTotal = total - neverPurchasedCount
 
   const displayList = useMemo(
     () => (selectedSegment ? scored.filter((c) => c.segment === selectedSegment) : scored)
@@ -105,14 +113,24 @@ export default function RFMAnalysis({ customers }: { customers: EnrichedCustomer
     <div className="space-y-6">
       {/* ── Cohort distribution bar ─────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl shadow-card p-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">
-          Cohort Distribution — {total} customers
-        </p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400">
+            Cohort Distribution — {buyerTotal} purchasing customers
+          </p>
+          {neverPurchasedCount > 0 && (
+            <button
+              onClick={onNavigateToJourney}
+              className="text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors"
+            >
+              + {neverPurchasedCount} never purchased → see Journey
+            </button>
+          )}
+        </div>
         <div className="flex h-10 rounded-xl overflow-hidden gap-px">
-          {SEGMENT_ORDER.map((seg) => {
+          {BUYER_SEGMENT_ORDER.map((seg) => {
             const count = counts.get(seg) ?? 0
             if (count === 0) return null
-            const pct = (count / total) * 100
+            const pct = buyerTotal > 0 ? (count / buyerTotal) * 100 : 0
             const meta = SEGMENT_META[seg]
             return (
               <button
@@ -129,7 +147,7 @@ export default function RFMAnalysis({ customers }: { customers: EnrichedCustomer
           })}
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3">
-          {SEGMENT_ORDER.map((seg) => {
+          {BUYER_SEGMENT_ORDER.map((seg) => {
             const count = counts.get(seg) ?? 0
             if (count === 0) return null
             const meta = SEGMENT_META[seg]
@@ -144,10 +162,10 @@ export default function RFMAnalysis({ customers }: { customers: EnrichedCustomer
       </div>
 
       {/* ── Segment cards ───────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-4 gap-3">
-        {SEGMENT_ORDER.map((seg) => {
+      <div className="grid grid-cols-3 gap-3">
+        {BUYER_SEGMENT_ORDER.map((seg) => {
           const count = counts.get(seg) ?? 0
-          const pct = total > 0 ? ((count / total) * 100).toFixed(0) : '0'
+          const pct = buyerTotal > 0 ? ((count / buyerTotal) * 100).toFixed(0) : '0'
           const meta = SEGMENT_META[seg]
           const isSelected = selectedSegment === seg
           const allProductTagsInSeg = new Set(
