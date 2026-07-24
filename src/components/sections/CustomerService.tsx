@@ -1,16 +1,17 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   RefreshCw, AlertCircle, Mail, ArrowLeft, Send, Plus, Trash2,
   Edit2, Check, X, Loader2, Inbox, BookOpen, ChevronDown, ChevronLeft, ChevronRight, Tag, User,
-  ShieldAlert, Ban,
+  ShieldAlert, Ban, ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
+import TagBadge from '@/components/ui/TagBadge'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import { isLikelySpamSender } from '@/lib/spam-detection'
-import type { CSTicket, CSMacro, TicketStatus, TicketTag } from '@/types'
+import type { CSTicket, CSMacro, TicketStatus, TicketTag, EnrichedCustomer } from '@/types'
 import { TICKET_TAGS } from '@/types'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -27,6 +28,42 @@ const STATUS_STYLES: Record<TicketStatus, string> = {
   archived:          'bg-sand-100 text-charcoal-500 border border-sand-300',
   resolved:          'bg-olive-100 text-olive-600 border border-olive-200',
   spam:              'bg-red-50 text-red-600 border border-red-200',
+}
+
+type TicketSortKey = 'from' | 'subject' | 'date' | 'status' | 'stage' | 'tags'
+type SortDir = 'asc' | 'desc'
+
+function SortableTh({
+  label,
+  sortKeyValue,
+  activeKey,
+  dir,
+  onSort,
+  widthClass,
+}: {
+  label: string
+  sortKeyValue: TicketSortKey
+  activeKey: TicketSortKey
+  dir: SortDir
+  onSort: (key: TicketSortKey) => void
+  widthClass?: string
+}) {
+  const active = activeKey === sortKeyValue
+  return (
+    <th className={`px-4 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400 ${widthClass ?? ''}`}>
+      <button
+        onClick={() => onSort(sortKeyValue)}
+        className={`inline-flex items-center gap-1 hover:text-charcoal-600 transition-colors ${active ? 'text-charcoal-600' : ''}`}
+      >
+        {label}
+        {active
+          ? dir === 'asc'
+            ? <ArrowUp size={11} className="text-terracotta-500" />
+            : <ArrowDown size={11} className="text-terracotta-500" />
+          : <ArrowUpDown size={11} className="opacity-30" />}
+      </button>
+    </th>
+  )
 }
 
 // ─── Ticket Detail ───────────────────────────────────────────────────────────
@@ -48,6 +85,7 @@ function TicketDetail({
   emailHidden,
   onToggleEmail,
   initialReplyBody,
+  customerTag,
 }: {
   ticket: CSTicket
   macros: CSMacro[]
@@ -65,6 +103,7 @@ function TicketDetail({
   emailHidden: boolean
   onToggleEmail: () => void
   initialReplyBody?: string
+  customerTag?: string
 }) {
   const [ticket, setTicket] = useState(initial)
   const [replyBody, setReplyBody] = useState(initialReplyBody ?? '')
@@ -218,17 +257,20 @@ function TicketDetail({
             </button>
           )}
         </div>
-        <p className="text-sm text-charcoal-400">
-          From <span className="text-charcoal-600 font-medium">{ticket.fromName}</span>
-          {' '}·{' '}
-          <MaskedEmail
-            email={ticket.from}
-            hidden={emailHidden}
-            onToggle={onToggleEmail}
-            mailto
-            className="text-terracotta-500"
-          />
-          {' '}·{' '}{fmtDate(ticket.receivedAt)}
+        <p className="text-sm text-charcoal-400 flex items-center flex-wrap gap-1.5">
+          <span>
+            From <span className="text-charcoal-600 font-medium">{ticket.fromName}</span>
+            {' '}·{' '}
+            <MaskedEmail
+              email={ticket.from}
+              hidden={emailHidden}
+              onToggle={onToggleEmail}
+              mailto
+              className="text-terracotta-500"
+            />
+            {' '}·{' '}{fmtDate(ticket.receivedAt)}
+          </span>
+          {customerTag && <TagBadge tag={customerTag} />}
         </p>
 
         {/* Tags */}
@@ -803,12 +845,32 @@ export default function CustomerService({
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<TicketStatus>('open')
   const [searchQuery, setSearchQuery] = useState('')
+  const [sortKey, setSortKey] = useState<TicketSortKey>('date')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
+
+  function handleSort(key: TicketSortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir(key === 'date' ? 'desc' : 'asc')
+    }
+  }
   const [selectedTicket, setSelectedTicket] = useState<CSTicket | null>(null)
   const [pendingReplyBody, setPendingReplyBody] = useState<{ ticketId: string; body: string } | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [bulkMoving, setBulkMoving] = useState(false)
   const [hiddenEmails, setHiddenEmails] = useState<Set<string>>(new Set())
+  const [customers, setCustomers] = useState<EnrichedCustomer[]>([])
+
+  const customerTagByEmail = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const c of customers) {
+      if (c.email && c.computedTags?.length) map.set(c.email.toLowerCase(), c.computedTags[0])
+    }
+    return map
+  }, [customers])
 
   function toggleEmailVisibility(email: string) {
     const key = email.toLowerCase()
@@ -830,20 +892,23 @@ export default function CustomerService({
     setLoading(true)
     setError(null)
     try {
-      const [ticketRes, macroRes, tagRes] = await Promise.all([
+      const [ticketRes, macroRes, tagRes, custRes] = await Promise.all([
         fetch(withDummyParam('/api/cs/tickets', includeDummy)),
         fetch('/api/cs/macros'),
         fetch('/api/cs/tags'),
+        fetch(withDummyParam('/api/shopify/customers', includeDummy)),
       ])
       const td = await ticketRes.json()
       const md = await macroRes.json()
       const tgd = await tagRes.json()
+      const cd = await custRes.json()
       if (!ticketRes.ok) throw new Error(td.error)
       setTickets(td.tickets ?? [])
       setMsConnected(td.msConnected ?? false)
       setMacros(md.macros ?? [])
       setCustomTags(tgd.tags ?? [])
       setHiddenTags(tgd.hidden ?? [])
+      if (custRes.ok) setCustomers(cd.customers ?? [])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -893,7 +958,23 @@ export default function CustomerService({
         t.thread.some((m) => m.body.toLowerCase().includes(q))
       )
     })
-    .sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime())
+    .sort((a, b) => {
+      let cmp = 0
+      switch (sortKey) {
+        case 'from': cmp = a.fromName.localeCompare(b.fromName); break
+        case 'subject': cmp = a.subject.localeCompare(b.subject); break
+        case 'date': cmp = a.receivedAt.localeCompare(b.receivedAt); break
+        case 'status': cmp = a.status.localeCompare(b.status); break
+        case 'stage': {
+          const sa = customerTagByEmail.get(a.from.toLowerCase()) ?? ''
+          const sb = customerTagByEmail.get(b.from.toLowerCase()) ?? ''
+          cmp = sa.localeCompare(sb)
+          break
+        }
+        case 'tags': cmp = a.tags.join(',').localeCompare(b.tags.join(',')); break
+      }
+      return sortDir === 'asc' ? cmp : -cmp
+    })
 
   const allSelected = filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id))
 
@@ -958,7 +1039,7 @@ export default function CustomerService({
   }
 
   return (
-    <section className="max-w-6xl">
+    <section className="max-w-full">
       {onBackToSalesOverview && (
         <button
           onClick={onBackToSalesOverview}
@@ -1139,10 +1220,11 @@ export default function CustomerService({
                 </div>
               ) : (
                 <div className="bg-white rounded-2xl shadow-card overflow-hidden">
-                  <table className="w-full text-sm">
+                  <div className="overflow-x-auto">
+                  <table className="w-full table-fixed text-sm">
                     <thead>
                       <tr className="bg-sand-100 text-left">
-                        <th className="pl-5 pr-2 py-3">
+                        <th className="pl-5 pr-2 py-3 w-10">
                           <input
                             type="checkbox"
                             checked={allSelected}
@@ -1150,15 +1232,18 @@ export default function CustomerService({
                             className="rounded border-sand-400 text-terracotta-500 focus:ring-terracotta-300 cursor-pointer"
                           />
                         </th>
-                        <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">From</th>
-                        <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Subject</th>
-                        <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Date</th>
-                        <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Status</th>
-                        <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-charcoal-400">Tags</th>
+                        <SortableTh label="From" sortKeyValue="from" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[22%]" />
+                        <SortableTh label="Subject" sortKeyValue="subject" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[26%]" />
+                        <SortableTh label="Date" sortKeyValue="date" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[16%]" />
+                        <SortableTh label="Status" sortKeyValue="status" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[12%]" />
+                        <SortableTh label="Stage" sortKeyValue="stage" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[12%]" />
+                        <SortableTh label="Tags" sortKeyValue="tags" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[12%]" />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-sand-200">
-                      {filtered.map((t) => (
+                      {filtered.map((t) => {
+                        const custTag = customerTagByEmail.get(t.from.toLowerCase())
+                        return (
                         <tr
                           key={t.id}
                           onClick={() => setSelectedTicket(t)}
@@ -1172,9 +1257,9 @@ export default function CustomerService({
                               className="rounded border-sand-400 text-terracotta-500 focus:ring-terracotta-300 cursor-pointer"
                             />
                           </td>
-                          <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
-                            <p className="font-medium text-charcoal-700 flex items-center gap-1.5">
-                              {t.fromName}
+                          <td className="px-4 py-4 min-w-0" onClick={(e) => e.stopPropagation()}>
+                            <p className="font-medium text-charcoal-700 flex items-center gap-1.5 min-w-0">
+                              <span className="truncate">{t.fromName}</span>
                               {isLikelySpamSender(t.from) && (
                                 <span title="Possible spam sender">
                                   <ShieldAlert size={13} className="text-red-500 shrink-0" />
@@ -1184,13 +1269,13 @@ export default function CustomerService({
                                 <button
                                   onClick={(e) => { e.stopPropagation(); quickMarkSpam(t.id) }}
                                   title="Mark as spam"
-                                  className="text-red-400 hover:text-red-600 transition-colors"
+                                  className="text-red-400 hover:text-red-600 transition-colors shrink-0"
                                 >
                                   <Ban size={13} />
                                 </button>
                               )}
                             </p>
-                            <p className="text-xs text-charcoal-400 mt-0.5">
+                            <p className="text-xs text-charcoal-400 mt-0.5 truncate">
                               <MaskedEmail
                                 email={t.from}
                                 hidden={hiddenEmails.has(t.from.toLowerCase())}
@@ -1198,12 +1283,15 @@ export default function CustomerService({
                               />
                             </p>
                           </td>
-                          <td className="px-4 py-4 text-charcoal-600 max-w-xs truncate">{t.subject}</td>
-                          <td className="px-4 py-4 text-charcoal-400 whitespace-nowrap">{fmtDate(t.receivedAt)}</td>
+                          <td className="px-4 py-4 text-charcoal-600 truncate">{t.subject}</td>
+                          <td className="px-4 py-4 text-charcoal-400 truncate">{fmtDate(t.receivedAt)}</td>
                           <td className="px-4 py-4">
                             <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium capitalize ${STATUS_STYLES[t.status]}`}>
                               {t.status}
                             </span>
+                          </td>
+                          <td className="px-4 py-4">
+                            {custTag ? <TagBadge tag={custTag} /> : <span className="text-xs text-charcoal-300">—</span>}
                           </td>
                           <td className="px-4 py-4">
                             <div className="flex flex-wrap gap-1">
@@ -1217,9 +1305,11 @@ export default function CustomerService({
                             </div>
                           </td>
                         </tr>
-                      ))}
+                        )
+                      })}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </>
@@ -1244,6 +1334,7 @@ export default function CustomerService({
                 onNavigateToCustomer={onNavigateToCustomer}
                 emailHidden={hiddenEmails.has(selectedTicket.from.toLowerCase())}
                 onToggleEmail={() => toggleEmailVisibility(selectedTicket.from)}
+                customerTag={customerTagByEmail.get(selectedTicket.from.toLowerCase())}
                 onUpdated={(updated) => {
                   setTickets((prev) => prev.map((t) => t.id === updated.id ? updated : t))
                   setSelectedTicket(updated)
