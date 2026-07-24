@@ -4,19 +4,38 @@ import { createShopifyClient } from '@/lib/shopify'
 import { REVENUE_STATUSES } from '@/lib/shopify-constants'
 import { readProductCategories } from '@/lib/product-categories-storage'
 import { readProductCogs } from '@/lib/product-cogs-storage'
-import { readDummyOrders } from '@/lib/dummy-data'
+import { readDummyOrders, readDummyReturns } from '@/lib/dummy-data'
+import { fetchQualifyingReturnsByTitle, aggregateQualifyingReturns } from '@/lib/shopify-returns'
 import type { ShopifyOrder, ShopifyProduct, ShopifyInventoryItem, ProductSummary } from '@/types'
 
 interface SalesEntry {
   unitsSold: number
   unitsSoldWeek: number
   unitsSoldMonth: number
+  unitsSoldAllTime: number
   revenue: number
   orderIds: Set<number>
   imageUrl: string | null
   vendor: string
   productType: string
   lastSoldAt: string | null
+}
+
+const MIN_UNITS_FOR_RETURN_FLAG = 5
+const RETURN_RATE_THRESHOLD = 0.2
+
+// Requires read_returns — falls back to an empty map (no return-rate flag shown) rather than
+// failing the whole page, same pattern as the optional read_products/read_inventory scopes.
+async function fetchReturnsSafe(
+  shopify: ReturnType<typeof createShopifyClient>,
+): Promise<{ returnsByTitle: Map<string, number>; returnsAvailable: boolean }> {
+  try {
+    const returnsByTitle = await fetchQualifyingReturnsByTitle(shopify)
+    return { returnsByTitle, returnsAvailable: true }
+  } catch (err) {
+    console.warn('[products] could not fetch returns (likely missing read_returns scope), return-rate flag unavailable:', err instanceof Error ? err.message : err)
+    return { returnsByTitle: new Map(), returnsAvailable: false }
+  }
 }
 
 const INVENTORY_ITEM_CHUNK_SIZE = 250
@@ -56,23 +75,37 @@ export async function GET(req: NextRequest) {
 
   try {
     const shopify = createShopifyClient(session)
-    const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString()
+    const yearAgoDate = new Date(Date.now() - 365 * 86_400_000)
     const weekAgo = new Date(Date.now() - 7 * 86_400_000)
     const monthAgo = new Date(Date.now() - 30 * 86_400_000)
 
-    const [shopResult, orders] = await Promise.all([
+    // Orders are fetched with no date floor — the return-rate flag needs all-time units sold as
+    // its denominator. Trailing-window stats below (unitsSold/Week/Month, revenue) are still
+    // computed by explicitly gating on order date, same numbers as before, just no longer
+    // implicit via the query filter.
+    const [shopResult, orders, returnsResult] = await Promise.all([
       shopify.get<{ shop: { currency: string; primary_locale: string | null; country_code: string | null } }>('/shop.json', {
         fields: 'currency,primary_locale,country_code',
       }),
       shopify.getAll<ShopifyOrder>('/orders.json', 'orders', {
         status: 'any',
-        created_at_min: yearAgo,
         fields: 'id,created_at,financial_status,line_items',
       }),
+      fetchReturnsSafe(shopify),
     ])
 
+    const { returnsByTitle } = returnsResult
+    let returnsAvailable = returnsResult.returnsAvailable
+
     if (req.nextUrl.searchParams.get('dummy') === '1') {
-      orders.push(...readDummyOrders().filter((o) => o.created_at >= yearAgo))
+      orders.push(...readDummyOrders())
+      const dummyReturns = aggregateQualifyingReturns(readDummyReturns())
+      for (const [title, qty] of dummyReturns) {
+        returnsByTitle.set(title, (returnsByTitle.get(title) ?? 0) + qty)
+      }
+      // Demo data should demonstrate the flag even when the real read_returns scope isn't
+      // granted yet — same spirit as dummy orders working regardless of read_products.
+      if (dummyReturns.size > 0) returnsAvailable = true
     }
 
     const productCategoryMap = readProductCategories()
@@ -91,6 +124,7 @@ export async function GET(req: NextRequest) {
           unitsSold: 0,
           unitsSoldWeek: 0,
           unitsSoldMonth: 0,
+          unitsSoldAllTime: 0,
           revenue: 0,
           orderIds: new Set<number>(),
           imageUrl: item.image_url ?? null,
@@ -99,8 +133,11 @@ export async function GET(req: NextRequest) {
           lastSoldAt: null,
         }
 
-        entry.unitsSold += item.quantity
-        entry.revenue += parseFloat(item.price) * item.quantity
+        entry.unitsSoldAllTime += item.quantity
+        if (orderDate >= yearAgoDate) {
+          entry.unitsSold += item.quantity
+          entry.revenue += parseFloat(item.price) * item.quantity
+        }
         if (orderDate >= weekAgo) entry.unitsSoldWeek += item.quantity
         if (orderDate >= monthAgo) entry.unitsSoldMonth += item.quantity
         entry.orderIds.add(order.id)
@@ -143,6 +180,10 @@ export async function GET(req: NextRequest) {
         const hasSoldOutVariant = (p.variants ?? []).some((v) => v.inventory_quantity === 0)
         const firstVariant = p.variants?.[0]
         const manualCogsEntry = productCogsMap[String(p.id)]
+        const unitsSoldAllTime = sales?.unitsSoldAllTime ?? 0
+        const returnedQty = returnsByTitle.get(p.title) ?? 0
+        const returnRate = returnsAvailable && unitsSoldAllTime > 0 ? returnedQty / unitsSoldAllTime : null
+        const returnFlagged = returnRate != null && unitsSoldAllTime >= MIN_UNITS_FOR_RETURN_FLAG && returnRate > RETURN_RATE_THRESHOLD
         return {
           title: p.title,
           category: productCategoryMap[p.title] || (tags.length > 0 ? tags.join(', ') : p.product_type?.trim() || null),
@@ -164,33 +205,42 @@ export async function GET(req: NextRequest) {
           cogs: manualCogsEntry?.manualCogs ?? null,
           nativeCogs: firstVariant?.inventory_item_id != null ? inventoryItemCosts.get(firstVariant.inventory_item_id) ?? null : null,
           hasSoldOutVariant,
+          returnRate,
+          returnFlagged,
         }
       })
     } catch (err) {
       console.warn('[products] could not fetch full catalog (likely missing read_products scope), falling back to order-derived list:', err instanceof Error ? err.message : err)
       source = 'orders'
-      products = Array.from(salesMap.entries()).map(([title, sales]) => ({
-        title,
-        category: productCategoryMap[title] || sales.productType?.trim() || null,
-        imageUrl: sales.imageUrl,
-        vendor: sales.vendor,
-        unitsSold: sales.unitsSold,
-        unitsSoldWeek: sales.unitsSoldWeek,
-        unitsSoldMonth: sales.unitsSoldMonth,
-        revenue: sales.revenue,
-        ordersCount: sales.orderIds.size,
-        productId: null,
-        sku: null,
-        inventoryQuantity: null,
-        status: null,
-        publishedAt: null,
-        createdAt: null,
-        price: null,
-        lastSoldAt: sales.lastSoldAt,
-        cogs: null,
-        nativeCogs: null,
-        hasSoldOutVariant: false,
-      }))
+      products = Array.from(salesMap.entries()).map(([title, sales]) => {
+        const returnedQty = returnsByTitle.get(title) ?? 0
+        const returnRate = returnsAvailable && sales.unitsSoldAllTime > 0 ? returnedQty / sales.unitsSoldAllTime : null
+        const returnFlagged = returnRate != null && sales.unitsSoldAllTime >= MIN_UNITS_FOR_RETURN_FLAG && returnRate > RETURN_RATE_THRESHOLD
+        return {
+          title,
+          category: productCategoryMap[title] || sales.productType?.trim() || null,
+          imageUrl: sales.imageUrl,
+          vendor: sales.vendor,
+          unitsSold: sales.unitsSold,
+          unitsSoldWeek: sales.unitsSoldWeek,
+          unitsSoldMonth: sales.unitsSoldMonth,
+          revenue: sales.revenue,
+          ordersCount: sales.orderIds.size,
+          productId: null,
+          sku: null,
+          inventoryQuantity: null,
+          status: null,
+          publishedAt: null,
+          createdAt: null,
+          price: null,
+          lastSoldAt: sales.lastSoldAt,
+          cogs: null,
+          nativeCogs: null,
+          hasSoldOutVariant: false,
+          returnRate,
+          returnFlagged,
+        }
+      })
     }
 
     const { primary_locale, country_code } = shopResult.shop
@@ -198,7 +248,7 @@ export async function GET(req: NextRequest) {
 
     // Hardcoded: the dashboard always displays amounts in EUR, regardless of what
     // Shopify's shop.json reports as the store's configured currency.
-    return NextResponse.json({ products, currency: 'EUR', locale, source, inventoryAvailable: source === 'catalog' })
+    return NextResponse.json({ products, currency: 'EUR', locale, source, inventoryAvailable: source === 'catalog', returnsAvailable })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })

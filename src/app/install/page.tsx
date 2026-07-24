@@ -30,6 +30,7 @@ export default function InstallPage() {
             <li>• <span className="font-medium">read_orders</span> — late shipments &amp; sales overview</li>
             <li>• <span className="font-medium">read_customers</span> — customer intelligence</li>
             <li>• <span className="font-medium">write_customers</span> — sync behavioral tags back to Shopify</li>
+            <li>• <span className="font-medium">read_returns</span> — product health / return-rate flagging</li>
           </ul>
         </div>
 

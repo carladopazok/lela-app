@@ -274,6 +274,8 @@ export interface ProductSummary {
   cogs: number | null             // manually entered cost, from data/product-cogs.json, keyed by product id
   nativeCogs: number | null       // Shopify's "Cost per item" (InventoryItem.cost), first variant
   hasSoldOutVariant: boolean      // true if any single variant is at 0 — distinct from inventoryQuantity, which sums across variants
+  returnRate: number | null       // qualifying-reason returns ÷ all-time units sold; null if never sold or read_returns unavailable
+  returnFlagged: boolean          // returnRate > 20% AND at least 5 units sold all-time
 }
 
 // ─── Back in Stock signups ──────────────────────────────────────────────────
@@ -332,6 +334,7 @@ export interface ProductsResponse {
   locale: string
   source: 'catalog' | 'orders'
   inventoryAvailable: boolean
+  returnsAvailable: boolean
 }
 
 // ─── Related Products / Cross-sell ─────────────────────────────────────────

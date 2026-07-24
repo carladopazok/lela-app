@@ -23,9 +23,10 @@ Two modes (checked in this order by middleware and `getSession()`):
 1. **Env var shortcut**: set `SHOPIFY_ACCESS_TOKEN` + `SHOPIFY_STORE_DOMAIN` → skips OAuth entirely
 2. **OAuth**: Shopify Partner app flow via `/api/auth` → `/api/auth/callback`; session stored in AES-256-GCM HTTP-only cookie `lela_session`
 
-Required Shopify scopes: `read_orders, read_all_orders, read_customers, write_customers, read_products, read_inventory`  
+Required Shopify scopes: `read_orders, read_all_orders, read_customers, write_customers, read_products, read_inventory, read_returns`  
 `read_all_orders` is mandatory — without it, orders older than 60 days are invisible.  
-`read_products` and `read_inventory` are granted (confirmed 2026-07-15) — the try/catch wrapping around `/products.json` fetches can stay as general defensive error handling, but isn't compensating for a missing scope anymore.
+`read_products` and `read_inventory` are granted (confirmed 2026-07-15) — the try/catch wrapping around `/products.json` fetches can stay as general defensive error handling, but isn't compensating for a missing scope anymore.  
+`read_returns` was added 2026-07-24 for the Product Health / return-rate flag (`src/lib/shopify-returns.ts`) — confirmed granted 2026-07-24.
 
 ## Architecture
 

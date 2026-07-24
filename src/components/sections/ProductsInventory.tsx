@@ -4,13 +4,14 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   RefreshCw, AlertCircle, Package, Check, X, Info, Boxes, XCircle, Clock, Mail, Loader2,
   Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, ArrowLeft, Users,
+  AlertTriangle,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import { STALLED_DAYS, daysSince, isStalled, isSoldOutLive, getStalledUnitsSummary } from '@/lib/product-metrics'
 import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse } from '@/types'
 
-type ActiveFilter = 'all' | 'soldout' | 'stalled'
+type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk'
 type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status'
 type SortDir = 'asc' | 'desc'
 type StatusBadge = 'bestseller' | 'soldout' | 'stalled' | null
@@ -323,6 +324,8 @@ interface ResolvedRow {
   cost: number | null // final resolved cost (native Shopify cost wins over manual)
   manualCost: number | null // manually entered cost only, for the CogsEditor's editable state
   margin: { amount: number; percent: number } | null
+  returnRate: number | null
+  returnFlagged: boolean
 }
 
 const BADGE_STYLES: Record<Exclude<StatusBadge, null>, { label: string; className: string }> = {
@@ -879,6 +882,14 @@ function ProductRow({
                     Variant sold out
                   </span>
                 )}
+                {row.returnFlagged && (
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap bg-red-50 text-red-600 border-red-200"
+                    title={`${(row.returnRate! * 100).toFixed(0)}% of units returned for sizing, style, description, or quality reasons`}
+                  >
+                    Potential issue with product
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-1.5 mt-1">
                 <span className="text-[10px] text-charcoal-300 uppercase tracking-wide">Cost:</span>
@@ -1028,6 +1039,7 @@ export default function ProductsInventory({
   const [locale, setLocale] = useState('en-US')
   const [source, setSource] = useState<'catalog' | 'orders'>('catalog')
   const [inventoryAvailable, setInventoryAvailable] = useState(false)
+  const [returnsAvailable, setReturnsAvailable] = useState(false)
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, string>>({})
   const [cogsOverrides, setCogsOverrides] = useState<Record<string, { sku: string; manualCogs: number }>>({})
   const [loading, setLoading] = useState(true)
@@ -1096,6 +1108,7 @@ export default function ProductsInventory({
       setLocale(productsData.locale ?? 'en-US')
       setSource(productsData.source ?? 'catalog')
       setInventoryAvailable(productsData.inventoryAvailable ?? false)
+      setReturnsAvailable(productsData.returnsAvailable ?? false)
       setCategoryOverrides(categoriesData.categories ?? {})
       setCogsOverrides(cogsData.cogs ?? {})
     } catch (e) {
@@ -1373,6 +1386,8 @@ export default function ProductsInventory({
 
   const soldOutProducts = useMemo(() => products.filter(isSoldOutLive), [products])
 
+  const returnFlaggedProducts = useMemo(() => products.filter((p) => p.returnFlagged), [products])
+
   const stalledSummary = useMemo(() => {
     const list = products.filter((p) => isStalled(p, STALLED_DAYS))
     const value = list.reduce((s, p) => {
@@ -1401,6 +1416,7 @@ export default function ProductsInventory({
     let list = products
     if (activeFilter === 'soldout') list = list.filter(isSoldOutLive)
     else if (activeFilter === 'stalled') list = list.filter((p) => isStalled(p, STALLED_DAYS))
+    else if (activeFilter === 'returnrisk') list = list.filter((p) => p.returnFlagged)
 
     const q = debouncedQuery.trim().toLowerCase()
     if (q) list = list.filter((p) => p.title.toLowerCase().includes(q))
@@ -1456,6 +1472,8 @@ export default function ProductsInventory({
         cost: cogsFor(p),
         manualCost: manualCogsFor(p),
         margin: marginAt(p.price, cogsFor(p)),
+        returnRate: p.returnRate,
+        returnFlagged: p.returnFlagged,
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1517,10 +1535,19 @@ export default function ProductsInventory({
         </div>
       )}
 
+      {!loading && !error && inventoryAvailable && !returnsAvailable && products.length > 0 && (
+        <div className="flex items-center gap-3 p-4 mb-6 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+          <Info size={16} className="shrink-0" />
+          Product health flagging needs a Shopify reconnect — return-reason data isn&apos;t active for this connection
+          yet, so the &quot;Potential issue with product&quot; flag can&apos;t be computed. Reconnecting Shopify from the
+          app usually resolves this.
+        </div>
+      )}
+
       {!loading && !error && inventoryAvailable && products.length > 0 && (
         <>
           {/* ─── KPI strip (client-side filter, no navigation) ────────────── */}
-          <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <KpiCard
               icon={<Boxes size={12} />}
               label="Total Inventory"
@@ -1545,6 +1572,15 @@ export default function ProductsInventory({
               footnote={`Stalled = no sale in over ${STALLED_DAYS} days. Potential revenue = full-price sell-through of on-hand stock.`}
               active={activeFilter === 'stalled'}
               onClick={() => setActiveFilter((f) => (f === 'stalled' ? 'all' : 'stalled'))}
+            />
+            <KpiCard
+              icon={<AlertTriangle size={12} />}
+              label="Product Health"
+              value={returnFlaggedProducts.length.toLocaleString()}
+              sub="return rate over 20%, sizing/style/quality reasons"
+              footnote="Requires 5+ units sold all-time to be flagged."
+              active={activeFilter === 'returnrisk'}
+              onClick={() => setActiveFilter((f) => (f === 'returnrisk' ? 'all' : 'returnrisk'))}
             />
           </div>
 
