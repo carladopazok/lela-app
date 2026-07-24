@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { X } from 'lucide-react'
-import { computeRFM, cellSegment, SEGMENT_META, SEGMENT_ORDER, BUYER_SEGMENT_ORDER } from '@/lib/rfm'
+import { computeRFM, SEGMENT_META, SEGMENT_ORDER, BUYER_SEGMENT_ORDER } from '@/lib/rfm'
 import TagBadge from '@/components/ui/TagBadge'
 import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import type { EnrichedCustomer } from '@/types'
@@ -97,12 +97,26 @@ export default function RFMAnalysis({
     return map
   }, [scored])
 
-  // 5×5 grid: grid[r-1][f-1] = count (buyers only)
+  // 5×5 grid: grid[r-1][f-1] = { count, segment } (buyers only). segment is the
+  // dominant real segment among customers actually landing in that R×F cell — cell
+  // color reflects real data, not an independent r/f classification rule.
   const grid = useMemo(() => {
-    const g: number[][] = Array.from({ length: 5 }, () => Array(5).fill(0))
+    const g: { count: number; segment: RFMSegment | null }[][] = Array.from({ length: 5 }, () =>
+      Array.from({ length: 5 }, () => ({ count: 0, segment: null as RFMSegment | null }))
+    )
+    const segCountsByCell = new Map<string, Map<RFMSegment, number>>()
     for (const c of scored) {
       if (c.orders_count === 0) continue
-      g[c.rfm.r - 1][c.rfm.f - 1]++
+      const key = `${c.rfm.r}-${c.rfm.f}`
+      const segCounts = segCountsByCell.get(key) ?? new Map<RFMSegment, number>()
+      segCounts.set(c.segment, (segCounts.get(c.segment) ?? 0) + 1)
+      segCountsByCell.set(key, segCounts)
+      g[c.rfm.r - 1][c.rfm.f - 1].count++
+    }
+    for (const [key, segCounts] of segCountsByCell) {
+      const [r, f] = key.split('-').map(Number)
+      const dominant = [...segCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+      g[r - 1][f - 1].segment = dominant
     }
     return g
   }, [scored])
@@ -232,16 +246,16 @@ export default function RFMAnalysis({
                 <span className="text-[10px] text-charcoal-400 w-6 shrink-0 text-right">R{r}</span>
                 <div className="grid grid-cols-5 gap-1.5 flex-1">
                   {[1, 2, 3, 4, 5].map((f) => {
-                    const count = grid[r - 1][f - 1]
-                    const seg = cellSegment(r, f)
-                    const meta = SEGMENT_META[seg]
+                    const cell = grid[r - 1][f - 1]
+                    const { count, segment: seg } = cell
+                    const meta = seg ? SEGMENT_META[seg] : null
                     return (
                       <button
                         key={f}
-                        onClick={() => count > 0 && toggle(seg)}
-                        title={`R${r} × F${f} · ${seg} · ${count} customer${count !== 1 ? 's' : ''}`}
+                        onClick={() => count > 0 && seg && toggle(seg)}
+                        title={`R${r} × F${f} · ${count} customer${count !== 1 ? 's' : ''}${seg ? ` · mostly ${seg}` : ''}`}
                         className={`h-10 rounded-lg flex items-center justify-center text-sm font-bold border transition-all
-                          ${count > 0
+                          ${count > 0 && meta
                             ? `${meta.bg} ${meta.text} ${meta.border} hover:opacity-80 cursor-pointer`
                             : 'bg-sand-50 border-sand-100 text-charcoal-200 cursor-default'}`}
                       >

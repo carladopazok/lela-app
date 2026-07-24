@@ -1,4 +1,5 @@
 import type { EnrichedCustomer } from '@/types'
+import { classifyCustomerStage, type LifecycleStage } from './segmentation'
 
 export type RFMSegment =
   | 'Champions'
@@ -49,14 +50,14 @@ export const SEGMENT_META: Record<
     action: 'Reward & upsell',
   },
   'Loyal': {
-    bar: 'bg-olive-500', bg: 'bg-olive-50', text: 'text-olive-700', border: 'border-olive-200',
-    hex: '#5a7a4e',
+    bar: 'bg-teal-500', bg: 'bg-teal-50', text: 'text-teal-700', border: 'border-teal-200',
+    hex: '#14b8a6',
     description: 'Regular buyers, consistent lifetime value',
     action: 'Loyalty programme',
   },
   'Potential Loyalists': {
-    bar: 'bg-amber-400', bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200',
-    hex: '#fbbf24',
+    bar: 'bg-olive-500', bg: 'bg-olive-50', text: 'text-olive-700', border: 'border-olive-200',
+    hex: '#5a7a4e',
     description: 'Bought recently, but infrequent so far',
     action: 'Nurture to loyalty',
   },
@@ -67,8 +68,8 @@ export const SEGMENT_META: Record<
     action: 'Re-engage before they drift',
   },
   'At Risk': {
-    bar: 'bg-orange-500', bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200',
-    hex: '#f97316',
+    bar: 'bg-amber-500', bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200',
+    hex: '#f59e0b',
     description: 'Used to buy often — gone quiet recently',
     action: 'Win-back campaign now',
   },
@@ -86,7 +87,9 @@ export const SEGMENT_META: Record<
   },
 }
 
-// 1–5 quintile score. higherIsBetter=true → high value → high score.
+// 1–5 quintile score. higherIsBetter=true → high value → high score. Still used for
+// the R/F/M score pips and the R×F heatmap axes — purely descriptive now, no longer
+// used to decide which segment a customer belongs to (see STAGE_TO_SEGMENT below).
 function quintile(value: number, all: number[], higherIsBetter: boolean): number {
   if (all.length <= 1) return 3
   const min = Math.min(...all)
@@ -97,13 +100,23 @@ function quintile(value: number, all: number[], higherIsBetter: boolean): number
   return higherIsBetter ? score : 6 - score
 }
 
-export function cellSegment(r: number, f: number): RFMSegment {
-  if (r >= 4 && f >= 4) return 'Champions'
-  if ((r >= 4 && f >= 2) || (r >= 3 && f >= 3)) return 'Loyal'
-  if (r >= 3) return 'Potential Loyalists'
-  if (f >= 3) return 'At Risk'
-  if (r >= 2 && f >= 2) return 'Needs Attention'
-  return 'Lost'
+// Single source of truth for WHICH segment a customer falls into: the shared
+// lifecycle classifier (src/lib/segmentation.ts), relabeled for this dashboard.
+// Replaces the old cellSegment(r, f) — a quintile-ranked R/F cell lookup that could
+// (and did) disagree with the lifecycle tags shown everywhere else in the app for
+// the same customer, since quintiles re-rank against whoever else is a customer
+// right now rather than using fixed thresholds. rfm.ts no longer defines any
+// classification thresholds of its own — segmentation.ts is the only place that does.
+export const STAGE_TO_SEGMENT: Record<LifecycleStage, RFMSegment> = {
+  'Never Purchased': 'Never Purchased',
+  New: 'Needs Attention',       // '1-order' tag
+  Active: 'Potential Loyalists',
+  Winback: 'At Risk',
+  Loyal: 'Loyal',
+  VIP: 'Champions',
+  'At Risk': 'At Risk',
+  Lapsed: 'Needs Attention',
+  Lost: 'Lost',
 }
 
 export function computeRFM(customers: EnrichedCustomer[]): ScoredCustomer[] {
@@ -118,12 +131,19 @@ export function computeRFM(customers: EnrichedCustomer[]): ScoredCustomer[] {
   const allM = buyers.map((c) => parseFloat(c.total_spent))
 
   return customers.map((c) => {
+    const stage = classifyCustomerStage({
+      ordersCount: c.orders_count,
+      lastOrderDate: c.lastOrderDate ? new Date(c.lastOrderDate) : null,
+      emailMarketingConsentState: c.email_marketing_consent?.state,
+    })
+    const segment = STAGE_TO_SEGMENT[stage]
+
     if (c.orders_count === 0) {
-      return { ...c, rfm: { r: 1, f: 1, m: 1 }, segment: 'Never Purchased' as const }
+      return { ...c, rfm: { r: 1, f: 1, m: 1 }, segment }
     }
     const r = quintile(recencyOf(c), allR, false) // fewer days since order = better recency
     const f = quintile(c.orders_count, allF, true)
     const m = quintile(parseFloat(c.total_spent), allM, true)
-    return { ...c, rfm: { r, f, m }, segment: cellSegment(r, f) }
+    return { ...c, rfm: { r, f, m }, segment }
   })
 }
