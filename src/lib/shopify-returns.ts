@@ -14,6 +14,10 @@ export const QUALIFYING_RETURN_REASONS = new Set([
   'DEFECTIVE',
 ])
 
+// returnLineItems resolves to the ReturnLineItemType interface (implemented by ReturnLineItem
+// and UnverifiedReturnLineItem) — fulfillmentLineItem only exists on the concrete ReturnLineItem
+// type, so it needs an inline fragment. Without it Shopify rejects the query outright with
+// "Field 'fulfillmentLineItem' doesn't exist on type 'ReturnLineItemType'".
 const RETURNS_QUERY = `
   query ProductHealthReturns($cursor: String) {
     orders(first: 50, after: $cursor) {
@@ -28,9 +32,11 @@ const RETURNS_QUERY = `
                     node {
                       quantity
                       returnReason
-                      fulfillmentLineItem {
-                        lineItem {
-                          title
+                      ... on ReturnLineItem {
+                        fulfillmentLineItem {
+                          lineItem {
+                            title
+                          }
                         }
                       }
                     }
@@ -61,7 +67,9 @@ interface ReturnsQueryResult {
                   node: {
                     quantity: number
                     returnReason: string | null
-                    fulfillmentLineItem: { lineItem: { title: string } | null } | null
+                    // Absent for UnverifiedReturnLineItem nodes — the inline fragment above only
+                    // matches ReturnLineItem, so this field is missing rather than null on those.
+                    fulfillmentLineItem?: { lineItem: { title: string } | null } | null
                   }
                 }>
               }
@@ -74,13 +82,33 @@ interface ReturnsQueryResult {
   }
 }
 
+// Per-title return detail. `qualifyingUnits` drives the Product Health flag; `byReason` keeps
+// every reason seen — including the OTHER/UNKNOWN ones excluded from the flag — so the drilldown
+// chart can show the full picture of why a product comes back.
+export interface ReturnBreakdown {
+  qualifyingUnits: number
+  byReason: Record<string, number>
+}
+
+function addReturn(
+  breakdownByTitle: Map<string, ReturnBreakdown>,
+  title: string,
+  reason: string,
+  quantity: number,
+) {
+  const entry = breakdownByTitle.get(title) ?? { qualifyingUnits: 0, byReason: {} }
+  if (QUALIFYING_RETURN_REASONS.has(reason)) entry.qualifyingUnits += quantity
+  entry.byReason[reason] = (entry.byReason[reason] ?? 0) + quantity
+  breakdownByTitle.set(title, entry)
+}
+
 // Requires the read_returns scope — throws (via shopify.graphql) if it's not granted, which
 // callers should treat as "return data unavailable" rather than a hard failure, same as the
 // read_products/read_inventory fallback pattern elsewhere in this codebase.
-export async function fetchQualifyingReturnsByTitle(
+export async function fetchReturnBreakdownByTitle(
   shopify: ReturnType<typeof createShopifyClient>,
-): Promise<Map<string, number>> {
-  const returnsByTitle = new Map<string, number>()
+): Promise<Map<string, ReturnBreakdown>> {
+  const breakdownByTitle = new Map<string, ReturnBreakdown>()
   let cursor: string | null = null
 
   while (true) {
@@ -91,8 +119,8 @@ export async function fetchQualifyingReturnsByTitle(
         for (const lineItemEdge of returnEdge.node.returnLineItems.edges) {
           const { quantity, returnReason, fulfillmentLineItem } = lineItemEdge.node
           const title = fulfillmentLineItem?.lineItem?.title
-          if (!title || !returnReason || !QUALIFYING_RETURN_REASONS.has(returnReason)) continue
-          returnsByTitle.set(title, (returnsByTitle.get(title) ?? 0) + quantity)
+          if (!title) continue
+          addReturn(breakdownByTitle, title, returnReason ?? 'UNKNOWN', quantity)
         }
       }
     }
@@ -101,7 +129,7 @@ export async function fetchQualifyingReturnsByTitle(
     cursor = data.orders.edges[data.orders.edges.length - 1].cursor
   }
 
-  return returnsByTitle
+  return breakdownByTitle
 }
 
 export interface DummyReturnEntry {
@@ -110,13 +138,12 @@ export interface DummyReturnEntry {
   quantity: number
 }
 
-// Shared with the real GraphQL path's filtering rule, so dummy mode demonstrates the same
-// OTHER/UNKNOWN exclusion and per-title aggregation as production data.
-export function aggregateQualifyingReturns(entries: DummyReturnEntry[]): Map<string, number> {
-  const returnsByTitle = new Map<string, number>()
+// Shared with the real GraphQL path's aggregation rule, so dummy mode demonstrates the same
+// OTHER/UNKNOWN exclusion and per-title breakdown as production data.
+export function aggregateReturnBreakdown(entries: DummyReturnEntry[]): Map<string, ReturnBreakdown> {
+  const breakdownByTitle = new Map<string, ReturnBreakdown>()
   for (const { title, reason, quantity } of entries) {
-    if (!QUALIFYING_RETURN_REASONS.has(reason)) continue
-    returnsByTitle.set(title, (returnsByTitle.get(title) ?? 0) + quantity)
+    addReturn(breakdownByTitle, title, reason, quantity)
   }
-  return returnsByTitle
+  return breakdownByTitle
 }

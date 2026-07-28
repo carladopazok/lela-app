@@ -6,9 +6,20 @@ import {
   Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, ArrowLeft, Users,
   AlertTriangle,
 } from 'lucide-react'
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  Cell,
+  XAxis,
+  YAxis,
+  Tooltip,
+  LabelList,
+} from 'recharts'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import { STALLED_DAYS, daysSince, isStalled, isSoldOutLive, getStalledUnitsSummary } from '@/lib/product-metrics'
+import { QUALIFYING_RETURN_REASONS } from '@/lib/shopify-returns'
 import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk'
@@ -797,6 +808,150 @@ function RestockSignupPanel({
   )
 }
 
+// Shopify's ReturnReason enum → the wording used in the store's own returns portal. UNKNOWN is
+// what we substitute when Shopify reports no reason at all (see shopify-returns.ts).
+const RETURN_REASON_LABELS: Record<string, string> = {
+  SIZE_TOO_SMALL: 'Too small',
+  SIZE_TOO_LARGE: 'Too large',
+  COLOR: 'Colour not right',
+  STYLE: 'Style not right',
+  NOT_AS_DESCRIBED: 'Not as described',
+  UNWANTED: 'Changed mind',
+  WRONG_ITEM: 'Wrong item sent',
+  DEFECTIVE: 'Damaged or defective',
+  OTHER: 'Other',
+  UNKNOWN: 'No reason given',
+}
+
+// One hue, two steps — full terracotta for the reasons that drive the health flag, a faded step
+// for OTHER/UNKNOWN which are excluded from it. Never the sole cue: every excluded bar also
+// carries a "not counted" tag on its label.
+const REASON_FILL_COUNTED = '#C16B4A'   // terracotta-500
+const REASON_FILL_EXCLUDED = '#E9CABF'  // terracotta-200
+
+interface ReasonDatum {
+  reason: string
+  label: string
+  units: number
+  counted: boolean
+  share: number
+}
+
+function ReturnReasonTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: ReasonDatum }> }) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  return (
+    <div className="bg-white border border-sand-200 rounded-lg shadow-card px-3 py-2">
+      <p className="text-xs font-medium text-charcoal-700">{d.label}</p>
+      <p className="text-xs text-charcoal-400 mt-0.5">
+        {d.units.toLocaleString()} unit{d.units === 1 ? '' : 's'} · {(d.share * 100).toFixed(0)}% of returns
+      </p>
+      {!d.counted && <p className="text-[10px] text-charcoal-300 mt-1">Not counted toward the health flag</p>}
+    </div>
+  )
+}
+
+function ReturnReasonsPanel({ product }: { product: ProductSummary }) {
+  const reasons: ReasonDatum[] = useMemo(() => {
+    const entries = Object.entries(product.returnReasons ?? {}).filter(([, units]) => units > 0)
+    const totalUnits = entries.reduce((sum, [, units]) => sum + units, 0)
+    return entries
+      .map(([reason, units]) => ({
+        reason,
+        label: RETURN_REASON_LABELS[reason] ?? reason,
+        units,
+        counted: QUALIFYING_RETURN_REASONS.has(reason),
+        share: totalUnits > 0 ? units / totalUnits : 0,
+      }))
+      .sort((a, b) => b.units - a.units)
+  }, [product.returnReasons])
+
+  if (reasons.length === 0) {
+    return (
+      <div className="bg-sand-50 rounded-xl p-4 mt-2">
+        <p className="text-sm text-charcoal-400 italic">No return reasons recorded for this product.</p>
+      </div>
+    )
+  }
+
+  const excludedUnits = reasons.filter((r) => !r.counted).reduce((sum, r) => sum + r.units, 0)
+  const topReason = reasons[0]
+  // Bars are 16px with an 18px gap so the labels sit comfortably; leave room for the axis footprint.
+  const chartHeight = reasons.length * 34 + 16
+
+  return (
+    <div className="bg-sand-50 rounded-xl p-4 mt-2">
+      <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">
+        Why {product.title} Comes Back
+      </p>
+
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 mb-4">
+        <div>
+          <p className="font-serif text-3xl text-charcoal-700 leading-none">
+            {product.returnRate != null ? `${(product.returnRate * 100).toFixed(0)}%` : '—'}
+          </p>
+          <p className="text-[11px] text-charcoal-400 mt-1">
+            {product.returnedUnits.toLocaleString()} of {product.unitsSoldAllTime.toLocaleString()} units sold returned
+            for a product reason
+          </p>
+        </div>
+        <p className="text-sm text-charcoal-500">
+          Biggest driver: <span className="text-charcoal-700 font-medium">{topReason.label}</span> —{' '}
+          {topReason.units.toLocaleString()} unit{topReason.units === 1 ? '' : 's'} ({(topReason.share * 100).toFixed(0)}%
+          of all returns).
+        </p>
+      </div>
+
+      <ResponsiveContainer width="100%" height={chartHeight}>
+        <BarChart data={reasons} layout="vertical" margin={{ top: 0, right: 48, left: 0, bottom: 0 }} barCategoryGap={18}>
+          <XAxis type="number" hide />
+          <YAxis
+            type="category"
+            dataKey="label"
+            width={150}
+            tick={{ fontSize: 12, fill: '#4A4A4A' }}
+            axisLine={false}
+            tickLine={false}
+          />
+          <Tooltip content={<ReturnReasonTooltip />} cursor={{ fill: '#EDE4D8', fillOpacity: 0.5 }} />
+          <Bar dataKey="units" barSize={16} radius={[0, 4, 4, 0]} isAnimationActive={false}>
+            {reasons.map((r) => (
+              <Cell key={r.reason} fill={r.counted ? REASON_FILL_COUNTED : REASON_FILL_EXCLUDED} />
+            ))}
+            <LabelList
+              dataKey="units"
+              position="right"
+              offset={8}
+              formatter={(v) => (typeof v === 'number' ? v.toLocaleString() : String(v ?? ''))}
+              style={{ fontSize: 11, fill: '#6B6B6B' }}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+
+      {excludedUnits > 0 && (
+        <>
+          <ul className="flex flex-wrap gap-x-4 gap-y-1 mt-3">
+            <li className="flex items-center gap-1.5 text-[11px] text-charcoal-400">
+              <span className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: REASON_FILL_COUNTED }} />
+              Counts toward the health rate
+            </li>
+            <li className="flex items-center gap-1.5 text-[11px] text-charcoal-400">
+              <span className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: REASON_FILL_EXCLUDED }} />
+              Not counted
+            </li>
+          </ul>
+          <p className="text-[11px] text-charcoal-400 mt-3 pt-3 border-t border-sand-200">
+            {excludedUnits.toLocaleString()} further unit{excludedUnits === 1 ? '' : 's'} came back with no actionable
+            reason — shown for context, but left out of the{' '}
+            {product.returnRate != null ? `${(product.returnRate * 100).toFixed(0)}%` : ''} health rate.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
 function ProductRow({
   row,
   index,
@@ -829,6 +984,8 @@ function ProductRow({
   restockLoading,
   restockError,
   onCreateRestockSegment,
+  returnsExpanded,
+  onToggleReturnsExpand,
 }: {
   row: ResolvedRow
   index: number
@@ -861,6 +1018,8 @@ function ProductRow({
   restockLoading: boolean
   restockError: string | null
   onCreateRestockSegment: (product: ProductSummary) => Promise<{ ok: boolean; message: string }>
+  returnsExpanded: boolean
+  onToggleReturnsExpand: () => void
 }) {
   const { product: p, badge, isSoldOutLive: soldOut } = row
   function money(n: number) { return fmt(n, currency, locale) }
@@ -883,12 +1042,17 @@ function ProductRow({
                   </span>
                 )}
                 {row.returnFlagged && (
-                  <span
-                    className="text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap bg-red-50 text-red-600 border-red-200"
-                    title={`${(row.returnRate! * 100).toFixed(0)}% of units returned for sizing, style, description, or quality reasons`}
+                  <button
+                    onClick={onToggleReturnsExpand}
+                    className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap transition-colors
+                      ${returnsExpanded
+                        ? 'bg-red-100 text-red-700 border-red-300'
+                        : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100 hover:border-red-300'}`}
+                    title={`${(row.returnRate! * 100).toFixed(0)}% of units returned for sizing, style, description, or quality reasons — click for the reason breakdown`}
                   >
                     Potential issue with product
-                  </span>
+                    <ChevronDown size={10} className={`transition-transform ${returnsExpanded ? 'rotate-180' : ''}`} />
+                  </button>
                 )}
               </div>
               <div className="flex items-center gap-1.5 mt-1">
@@ -1000,6 +1164,13 @@ function ProductRow({
           </td>
         </tr>
       )}
+      {row.returnFlagged && returnsExpanded && (
+        <tr>
+          <td colSpan={4} className="pb-3">
+            <ReturnReasonsPanel product={p} />
+          </td>
+        </tr>
+      )}
       {p.hasSoldOutVariant && restockExpanded && (
         <tr>
           <td colSpan={4} className="pb-3">
@@ -1088,6 +1259,19 @@ export default function ProductsInventory({
   const [restockCache, setRestockCache] = useState<Record<number, BackInStockResponse>>({})
   const [restockLoadingIds, setRestockLoadingIds] = useState<Set<number>>(new Set())
   const [restockErrors, setRestockErrors] = useState<Record<number, string>>({})
+
+  // Return-reason drilldown behind the "Potential issue with product" flag. Keyed by title, not
+  // product id — the order-derived fallback catalog has no product ids, and the flag shows there too.
+  const [returnsExpandedTitles, setReturnsExpandedTitles] = useState<Set<string>>(new Set())
+
+  function toggleReturnsExpand(title: string) {
+    setReturnsExpandedTitles((prev) => {
+      const next = new Set(prev)
+      if (next.has(title)) next.delete(title)
+      else next.add(title)
+      return next
+    })
+  }
 
   async function load() {
     setLoading(true)
@@ -1684,6 +1868,8 @@ export default function ProductsInventory({
                           restockLoading={restockLoading}
                           restockError={restockError}
                           onCreateRestockSegment={handleCreateRestockSegment}
+                          returnsExpanded={returnsExpandedTitles.has(p.title)}
+                          onToggleReturnsExpand={() => toggleReturnsExpand(p.title)}
                         />
                       )
                     })}

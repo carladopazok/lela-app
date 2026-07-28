@@ -276,6 +276,9 @@ export interface ProductSummary {
   hasSoldOutVariant: boolean      // true if any single variant is at 0 — distinct from inventoryQuantity, which sums across variants
   returnRate: number | null       // qualifying-reason returns ÷ all-time units sold; null if never sold or read_returns unavailable
   returnFlagged: boolean          // returnRate > 20% AND at least 5 units sold all-time
+  returnedUnits: number           // qualifying-reason units returned — numerator behind returnRate
+  unitsSoldAllTime: number        // denominator behind returnRate, no date floor
+  returnReasons: Record<string, number> | null // units returned per Shopify returnReason, incl. the OTHER/UNKNOWN ones excluded from the flag; null when read_returns unavailable
 }
 
 // ─── Back in Stock signups ──────────────────────────────────────────────────

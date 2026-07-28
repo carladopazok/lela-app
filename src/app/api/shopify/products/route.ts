@@ -5,7 +5,8 @@ import { REVENUE_STATUSES } from '@/lib/shopify-constants'
 import { readProductCategories } from '@/lib/product-categories-storage'
 import { readProductCogs } from '@/lib/product-cogs-storage'
 import { readDummyOrders, readDummyReturns } from '@/lib/dummy-data'
-import { fetchQualifyingReturnsByTitle, aggregateQualifyingReturns } from '@/lib/shopify-returns'
+import { fetchReturnBreakdownByTitle, aggregateReturnBreakdown } from '@/lib/shopify-returns'
+import type { ReturnBreakdown } from '@/lib/shopify-returns'
 import type { ShopifyOrder, ShopifyProduct, ShopifyInventoryItem, ProductSummary } from '@/types'
 
 interface SalesEntry {
@@ -28,9 +29,9 @@ const RETURN_RATE_THRESHOLD = 0.2
 // failing the whole page, same pattern as the optional read_products/read_inventory scopes.
 async function fetchReturnsSafe(
   shopify: ReturnType<typeof createShopifyClient>,
-): Promise<{ returnsByTitle: Map<string, number>; returnsAvailable: boolean }> {
+): Promise<{ returnsByTitle: Map<string, ReturnBreakdown>; returnsAvailable: boolean }> {
   try {
-    const returnsByTitle = await fetchQualifyingReturnsByTitle(shopify)
+    const returnsByTitle = await fetchReturnBreakdownByTitle(shopify)
     return { returnsByTitle, returnsAvailable: true }
   } catch (err) {
     console.warn('[products] could not fetch returns (likely missing read_returns scope), return-rate flag unavailable:', err instanceof Error ? err.message : err)
@@ -99,9 +100,17 @@ export async function GET(req: NextRequest) {
 
     if (req.nextUrl.searchParams.get('dummy') === '1') {
       orders.push(...readDummyOrders())
-      const dummyReturns = aggregateQualifyingReturns(readDummyReturns())
-      for (const [title, qty] of dummyReturns) {
-        returnsByTitle.set(title, (returnsByTitle.get(title) ?? 0) + qty)
+      const dummyReturns = aggregateReturnBreakdown(readDummyReturns())
+      for (const [title, dummy] of dummyReturns) {
+        const existing = returnsByTitle.get(title)
+        if (!existing) {
+          returnsByTitle.set(title, dummy)
+          continue
+        }
+        existing.qualifyingUnits += dummy.qualifyingUnits
+        for (const [reason, qty] of Object.entries(dummy.byReason)) {
+          existing.byReason[reason] = (existing.byReason[reason] ?? 0) + qty
+        }
       }
       // Demo data should demonstrate the flag even when the real read_returns scope isn't
       // granted yet — same spirit as dummy orders working regardless of read_products.
@@ -181,7 +190,8 @@ export async function GET(req: NextRequest) {
         const firstVariant = p.variants?.[0]
         const manualCogsEntry = productCogsMap[String(p.id)]
         const unitsSoldAllTime = sales?.unitsSoldAllTime ?? 0
-        const returnedQty = returnsByTitle.get(p.title) ?? 0
+        const returns = returnsByTitle.get(p.title)
+        const returnedQty = returns?.qualifyingUnits ?? 0
         const returnRate = returnsAvailable && unitsSoldAllTime > 0 ? returnedQty / unitsSoldAllTime : null
         const returnFlagged = returnRate != null && unitsSoldAllTime >= MIN_UNITS_FOR_RETURN_FLAG && returnRate > RETURN_RATE_THRESHOLD
         return {
@@ -207,13 +217,17 @@ export async function GET(req: NextRequest) {
           hasSoldOutVariant,
           returnRate,
           returnFlagged,
+          returnedUnits: returnedQty,
+          unitsSoldAllTime,
+          returnReasons: returnsAvailable && returns ? returns.byReason : null,
         }
       })
     } catch (err) {
       console.warn('[products] could not fetch full catalog (likely missing read_products scope), falling back to order-derived list:', err instanceof Error ? err.message : err)
       source = 'orders'
       products = Array.from(salesMap.entries()).map(([title, sales]) => {
-        const returnedQty = returnsByTitle.get(title) ?? 0
+        const returns = returnsByTitle.get(title)
+        const returnedQty = returns?.qualifyingUnits ?? 0
         const returnRate = returnsAvailable && sales.unitsSoldAllTime > 0 ? returnedQty / sales.unitsSoldAllTime : null
         const returnFlagged = returnRate != null && sales.unitsSoldAllTime >= MIN_UNITS_FOR_RETURN_FLAG && returnRate > RETURN_RATE_THRESHOLD
         return {
@@ -239,6 +253,9 @@ export async function GET(req: NextRequest) {
           hasSoldOutVariant: false,
           returnRate,
           returnFlagged,
+          returnedUnits: returnedQty,
+          unitsSoldAllTime: sales.unitsSoldAllTime,
+          returnReasons: returnsAvailable && returns ? returns.byReason : null,
         }
       })
     }
