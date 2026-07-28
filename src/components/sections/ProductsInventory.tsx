@@ -20,7 +20,7 @@ import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import { STALLED_DAYS, daysSince, isStalled, isSoldOutLive, getStalledUnitsSummary } from '@/lib/product-metrics'
 import { QUALIFYING_RETURN_REASONS } from '@/lib/shopify-returns'
-import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse } from '@/types'
+import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk'
 type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status'
@@ -337,6 +337,7 @@ interface ResolvedRow {
   margin: { amount: number; percent: number } | null
   returnRate: number | null
   returnFlagged: boolean
+  fitNote: FitNoteEntry | null
 }
 
 const BADGE_STYLES: Record<Exclude<StatusBadge, null>, { label: string; className: string }> = {
@@ -837,6 +838,145 @@ interface ReasonDatum {
   share: number
 }
 
+// The reason with the most returned units for a product — used only to pick a starting
+// suggestion for the fit note text, separate from the return-flag threshold logic above.
+function dominantReturnReason(product: ProductSummary): string | null {
+  const entries = Object.entries(product.returnReasons ?? {}).filter(([, units]) => units > 0)
+  if (entries.length === 0) return null
+  return entries.sort((a, b) => b[1] - a[1])[0][0]
+}
+
+// Pre-filled suggestion per dominant reason — only for reasons that are actually about fit
+// (sizing, style, colour, mismatch with description). Left out entirely for reasons like
+// wrong item / defective / changed mind, where a "fit" suggestion wouldn't make sense; the
+// field still opens for those, just blank and fully editable.
+const SUGGESTED_FIT_NOTES: Partial<Record<string, string>> = {
+  SIZE_TOO_SMALL: 'This item tends to run small — consider sizing up.',
+  SIZE_TOO_LARGE: 'This item tends to run large — consider sizing down.',
+  COLOR: 'The colour may look slightly different in person than in photos.',
+  STYLE: 'The fit and style have surprised some buyers — check the size guide and photos closely before ordering.',
+  NOT_AS_DESCRIBED: 'Some buyers found this item different than expected — please review the full description and photos before ordering.',
+}
+
+function FitNoteStatusPill({ entry, onClick }: { entry: FitNoteEntry; onClick: () => void }) {
+  const published = entry.status === 'published'
+  return (
+    <button
+      onClick={onClick}
+      className={`text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap transition-colors ${
+        published
+          ? 'bg-olive-100 text-olive-700 border-olive-300 hover:bg-olive-200'
+          : 'bg-sand-100 text-charcoal-500 border-sand-300 hover:bg-sand-200'
+      }`}
+      title={
+        published
+          ? 'Fit note is live on the product metafield — click to edit or unpublish'
+          : 'Draft fit note, not yet on the store — click to edit, publish, or delete'
+      }
+    >
+      Fit note: {published ? 'published' : 'draft'}
+    </button>
+  )
+}
+
+function FitNoteEditor({
+  product,
+  entry,
+  onSaveDraft,
+  onPublish,
+  onUnpublish,
+  onDeleteDraft,
+  onClose,
+}: {
+  product: ProductSummary
+  entry: FitNoteEntry | null
+  onSaveDraft: (productId: number, text: string) => Promise<void>
+  onPublish: (productId: number, text: string) => Promise<void>
+  onUnpublish: (productId: number) => Promise<void>
+  onDeleteDraft: (productId: number) => Promise<void>
+  onClose: () => void
+}) {
+  const [text, setText] = useState(entry?.text ?? SUGGESTED_FIT_NOTES[dominantReturnReason(product) ?? ''] ?? '')
+  const [busy, setBusy] = useState<'draft' | 'publish' | 'unpublish' | 'delete' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  if (product.productId == null) {
+    return (
+      <div className="bg-sand-50 rounded-xl p-4 mt-2">
+        <p className="text-sm text-charcoal-400 italic">
+          Fit notes need full catalog access (a Shopify reconnect) — this product doesn&apos;t have a Shopify product
+          id yet.
+        </p>
+      </div>
+    )
+  }
+  const productId = product.productId
+
+  async function run(action: 'draft' | 'publish' | 'unpublish' | 'delete', fn: () => Promise<void>, closeAfter = false) {
+    setBusy(action)
+    setError(null)
+    try {
+      await fn()
+      if (closeAfter) onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="bg-sand-50 rounded-xl p-4 mt-2">
+      <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">Fit Note</p>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={3}
+        placeholder="e.g. This item tends to run small — consider sizing up."
+        className="w-full px-3 py-2 text-sm border border-sand-300 rounded-lg focus:outline-none focus:border-terracotta-400 resize-none"
+      />
+      <div className="flex items-center flex-wrap gap-2 mt-3">
+        <button
+          onClick={() => run('draft', () => onSaveDraft(productId, text))}
+          disabled={busy != null || !text.trim()}
+          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-sand-300 text-charcoal-600 hover:border-terracotta-300 hover:text-terracotta-600 transition-colors disabled:opacity-50"
+        >
+          {busy === 'draft' ? <Loader2 size={11} className="animate-spin" /> : null} Save as draft
+        </button>
+        <button
+          onClick={() => run('publish', () => onPublish(productId, text))}
+          disabled={busy != null || !text.trim()}
+          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-terracotta-500 text-white hover:bg-terracotta-600 transition-colors disabled:opacity-50"
+        >
+          {busy === 'publish' ? <Loader2 size={11} className="animate-spin" /> : null} Save &amp; Publish to Store
+        </button>
+        {entry?.status === 'published' && (
+          <button
+            onClick={() => run('unpublish', () => onUnpublish(productId))}
+            disabled={busy != null}
+            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+          >
+            {busy === 'unpublish' ? <Loader2 size={11} className="animate-spin" /> : null} Unpublish
+          </button>
+        )}
+        {entry?.status === 'draft' && (
+          <button
+            onClick={() => run('delete', () => onDeleteDraft(productId), true)}
+            disabled={busy != null}
+            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+          >
+            {busy === 'delete' ? <Loader2 size={11} className="animate-spin" /> : null} Delete draft
+          </button>
+        )}
+        <button onClick={onClose} className="text-xs px-2 py-1.5 text-charcoal-400 hover:text-charcoal-600">
+          Close
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
+    </div>
+  )
+}
+
 function ReturnReasonTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: ReasonDatum }> }) {
   if (!active || !payload?.length) return null
   const d = payload[0].payload
@@ -851,7 +991,15 @@ function ReturnReasonTooltip({ active, payload }: { active?: boolean; payload?: 
   )
 }
 
-function ReturnReasonsPanel({ product }: { product: ProductSummary }) {
+function ReturnReasonsPanel({
+  product,
+  fitNote,
+  onAddFitNote,
+}: {
+  product: ProductSummary
+  fitNote: FitNoteEntry | null
+  onAddFitNote: () => void
+}) {
   const reasons: ReasonDatum[] = useMemo(() => {
     const entries = Object.entries(product.returnReasons ?? {}).filter(([, units]) => units > 0)
     const totalUnits = entries.reduce((sum, [, units]) => sum + units, 0)
@@ -881,9 +1029,19 @@ function ReturnReasonsPanel({ product }: { product: ProductSummary }) {
 
   return (
     <div className="bg-sand-50 rounded-xl p-4 mt-2">
-      <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">
-        Why {product.title} Comes Back
-      </p>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400">
+          Why {product.title} Comes Back
+        </p>
+        {!fitNote && (
+          <button
+            onClick={onAddFitNote}
+            className="shrink-0 text-[11px] px-2.5 py-1 rounded-lg border border-sand-300 text-charcoal-600 hover:border-terracotta-300 hover:text-terracotta-600 transition-colors"
+          >
+            + Add Fit Note
+          </button>
+        )}
+      </div>
 
       <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 mb-4">
         <div>
@@ -986,6 +1144,12 @@ function ProductRow({
   onCreateRestockSegment,
   returnsExpanded,
   onToggleReturnsExpand,
+  fitNoteExpanded,
+  onToggleFitNoteExpand,
+  onSaveFitNoteDraft,
+  onPublishFitNote,
+  onUnpublishFitNote,
+  onDeleteFitNoteDraft,
 }: {
   row: ResolvedRow
   index: number
@@ -1020,6 +1184,12 @@ function ProductRow({
   onCreateRestockSegment: (product: ProductSummary) => Promise<{ ok: boolean; message: string }>
   returnsExpanded: boolean
   onToggleReturnsExpand: () => void
+  fitNoteExpanded: boolean
+  onToggleFitNoteExpand: () => void
+  onSaveFitNoteDraft: (productId: number, text: string) => Promise<void>
+  onPublishFitNote: (productId: number, text: string) => Promise<void>
+  onUnpublishFitNote: (productId: number) => Promise<void>
+  onDeleteFitNoteDraft: (productId: number) => Promise<void>
 }) {
   const { product: p, badge, isSoldOutLive: soldOut } = row
   function money(n: number) { return fmt(n, currency, locale) }
@@ -1054,6 +1224,7 @@ function ProductRow({
                     <ChevronDown size={10} className={`transition-transform ${returnsExpanded ? 'rotate-180' : ''}`} />
                   </button>
                 )}
+                {row.fitNote && <FitNoteStatusPill entry={row.fitNote} onClick={onToggleFitNoteExpand} />}
               </div>
               <div className="flex items-center gap-1.5 mt-1">
                 <span className="text-[10px] text-charcoal-300 uppercase tracking-wide">Cost:</span>
@@ -1167,7 +1338,22 @@ function ProductRow({
       {row.returnFlagged && returnsExpanded && (
         <tr>
           <td colSpan={4} className="pb-3">
-            <ReturnReasonsPanel product={p} />
+            <ReturnReasonsPanel product={p} fitNote={row.fitNote} onAddFitNote={onToggleFitNoteExpand} />
+          </td>
+        </tr>
+      )}
+      {p.productId != null && fitNoteExpanded && (
+        <tr>
+          <td colSpan={4} className="pb-3">
+            <FitNoteEditor
+              product={p}
+              entry={row.fitNote}
+              onSaveDraft={onSaveFitNoteDraft}
+              onPublish={onPublishFitNote}
+              onUnpublish={onUnpublishFitNote}
+              onDeleteDraft={onDeleteFitNoteDraft}
+              onClose={onToggleFitNoteExpand}
+            />
           </td>
         </tr>
       )}
@@ -1273,19 +1459,90 @@ export default function ProductsInventory({
     })
   }
 
+  // Fit notes — local draft state plus the published custom.fit_note metafield status. Keyed by
+  // product id (a metafield write needs a real Shopify product, unlike categories/cogs which can
+  // fall back to title-keying).
+  const [fitNoteOverrides, setFitNoteOverrides] = useState<Record<string, FitNoteEntry>>({})
+  const [fitNoteExpandedIds, setFitNoteExpandedIds] = useState<Set<number>>(new Set())
+
+  function toggleFitNoteExpand(productId: number) {
+    setFitNoteExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(productId)) next.delete(productId)
+      else next.add(productId)
+      return next
+    })
+  }
+
+  function fitNoteFor(p: ProductSummary): FitNoteEntry | null {
+    if (p.productId == null) return null
+    return fitNoteOverrides[String(p.productId)] ?? null
+  }
+
+  async function handleSaveFitNoteDraft(productId: number, text: string) {
+    const res = await fetch('/api/shopify/product-fit-notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productId, text }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to save draft')
+    setFitNoteOverrides((prev) => ({ ...prev, [String(productId)]: data.fitNotes[String(productId)] }))
+  }
+
+  async function handlePublishFitNote(productId: number, text: string) {
+    const res = await fetch(`/api/shopify/products/${productId}/fit-note`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to publish fit note')
+    setFitNoteOverrides((prev) => ({ ...prev, [String(productId)]: data.fitNote }))
+  }
+
+  async function handleUnpublishFitNote(productId: number) {
+    const res = await fetch(`/api/shopify/products/${productId}/fit-note`, { method: 'DELETE' })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to unpublish fit note')
+    setFitNoteOverrides((prev) => {
+      const next = { ...prev }
+      if (data.fitNote) next[String(productId)] = data.fitNote
+      else delete next[String(productId)]
+      return next
+    })
+  }
+
+  async function handleDeleteFitNoteDraft(productId: number) {
+    const res = await fetch('/api/shopify/product-fit-notes', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productId }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to delete draft')
+    setFitNoteOverrides((prev) => {
+      const next = { ...prev }
+      delete next[String(productId)]
+      return next
+    })
+  }
+
   async function load() {
     setLoading(true)
     setError(null)
     try {
-      const [productsRes, categoriesRes, cogsRes] = await Promise.all([
+      const [productsRes, categoriesRes, cogsRes, fitNotesRes] = await Promise.all([
         fetch(withDummyParam('/api/shopify/products', includeDummy)),
         fetch('/api/shopify/product-categories'),
         fetch('/api/shopify/product-cogs'),
+        fetch('/api/shopify/product-fit-notes'),
       ])
       const productsData = await productsRes.json()
       if (!productsRes.ok) throw new Error(productsData.error)
       const categoriesData = await categoriesRes.json()
       const cogsData = await cogsRes.json()
+      const fitNotesData = await fitNotesRes.json()
 
       setProducts(productsData.products ?? [])
       setCurrency(productsData.currency ?? 'EUR')
@@ -1295,6 +1552,7 @@ export default function ProductsInventory({
       setReturnsAvailable(productsData.returnsAvailable ?? false)
       setCategoryOverrides(categoriesData.categories ?? {})
       setCogsOverrides(cogsData.cogs ?? {})
+      setFitNoteOverrides(fitNotesData.fitNotes ?? {})
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -1658,10 +1916,11 @@ export default function ProductsInventory({
         margin: marginAt(p.price, cogsFor(p)),
         returnRate: p.returnRate,
         returnFlagged: p.returnFlagged,
+        fitNote: fitNoteFor(p),
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides])
+  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, fitNoteOverrides])
 
   return (
     <section className="max-w-full">
@@ -1834,6 +2093,7 @@ export default function ProductsInventory({
                       const restockData = pid != null ? restockCache[pid] ?? null : null
                       const restockLoading = pid != null && restockLoadingIds.has(pid)
                       const restockError = pid != null ? restockErrors[pid] ?? null : null
+                      const fitNoteExpanded = pid != null && fitNoteExpandedIds.has(pid)
                       return (
                         <ProductRow
                           key={p.title}
@@ -1870,6 +2130,12 @@ export default function ProductsInventory({
                           onCreateRestockSegment={handleCreateRestockSegment}
                           returnsExpanded={returnsExpandedTitles.has(p.title)}
                           onToggleReturnsExpand={() => toggleReturnsExpand(p.title)}
+                          fitNoteExpanded={fitNoteExpanded}
+                          onToggleFitNoteExpand={() => pid != null && toggleFitNoteExpand(pid)}
+                          onSaveFitNoteDraft={handleSaveFitNoteDraft}
+                          onPublishFitNote={handlePublishFitNote}
+                          onUnpublishFitNote={handleUnpublishFitNote}
+                          onDeleteFitNoteDraft={handleDeleteFitNoteDraft}
                         />
                       )
                     })}

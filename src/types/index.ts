@@ -281,6 +281,14 @@ export interface ProductSummary {
   returnReasons: Record<string, number> | null // units returned per Shopify returnReason, incl. the OTHER/UNKNOWN ones excluded from the flag; null when read_returns unavailable
 }
 
+export interface FitNoteEntry {
+  text: string
+  status: 'draft' | 'published'
+  updatedAt: string
+}
+
+export type FitNotesStore = Record<string, FitNoteEntry> // keyed by Shopify product id (string)
+
 // ─── Back in Stock signups ──────────────────────────────────────────────────
 
 export interface BackInStockSignup {

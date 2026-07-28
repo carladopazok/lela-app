@@ -1,0 +1,28 @@
+{%- comment -%}
+  Fit Note — reference only, not part of the Next.js build.
+
+  Renders the custom.fit_note product metafield (written from the Lela dashboard's
+  Products & Inventory → "Add Fit Note" flow) directly on the product page. Purely a
+  Liquid read — no API calls, no JS needed, since the value already lives on the product.
+
+  Setup:
+  1. Shopify admin → Online Store → Themes → Edit code → Snippets → Add a new snippet
+     → name it "fit-note" → paste this file's contents.
+  2. Render it from your product template (e.g. main-product.liquid), near the
+     description or size guide, wherever it should catch a buyer's eye before checkout:
+       {% render 'fit-note', product: product %}
+{%- endcomment -%}
+
+{%- assign fit_note = product.metafields.custom.fit_note.value -%}
+{%- if fit_note != blank -%}
+  <div class="fit-note">
+    <p class="fit-note__label">Fit note</p>
+    <p class="fit-note__text">{{ fit_note }}</p>
+  </div>
+
+  <style>
+    .fit-note { margin: 1rem 0; padding: 0.75rem 1rem; border-left: 3px solid #C16B4A; background: #FBF3EC; border-radius: 0 8px 8px 0; }
+    .fit-note__label { margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #C16B4A; }
+    .fit-note__text { margin: 0; font-size: 0.9rem; line-height: 1.4; }
+  </style>
+{%- endif -%}

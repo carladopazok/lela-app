@@ -23,10 +23,11 @@ Two modes (checked in this order by middleware and `getSession()`):
 1. **Env var shortcut**: set `SHOPIFY_ACCESS_TOKEN` + `SHOPIFY_STORE_DOMAIN` → skips OAuth entirely
 2. **OAuth**: Shopify Partner app flow via `/api/auth` → `/api/auth/callback`; session stored in AES-256-GCM HTTP-only cookie `lela_session`
 
-Required Shopify scopes: `read_orders, read_all_orders, read_customers, write_customers, read_products, read_inventory, read_returns`  
+Required Shopify scopes: `read_orders, read_all_orders, read_customers, write_customers, read_products, write_products, read_inventory, read_returns`  
 `read_all_orders` is mandatory — without it, orders older than 60 days are invisible.  
 `read_products` and `read_inventory` are granted (confirmed 2026-07-15) — the try/catch wrapping around `/products.json` fetches can stay as general defensive error handling, but isn't compensating for a missing scope anymore.  
-`read_returns` was added 2026-07-24 for the Product Health / return-rate flag (`src/lib/shopify-returns.ts`) — confirmed granted 2026-07-24.
+`read_returns` was added 2026-07-24 for the Product Health / return-rate flag (`src/lib/shopify-returns.ts`) — confirmed granted 2026-07-24.  
+`write_products` was already relied on by the product status toggle (`src/app/api/shopify/products/[id]/status/route.ts`) and is also used to write the `custom.fit_note` metafield (`src/app/api/shopify/products/[id]/fit-note/route.ts`) — confirmed granted 2026-07-28; was missing from this list even though both features depend on it.
 
 ## Architecture
 
@@ -42,6 +43,7 @@ All routes: import `getSession` from `@/lib/session`, `createShopifyClient` from
 | `data/customer-manual-tags.json` | `src/lib/customer-tags-storage.ts` | `{ customerId: string[] }` |
 | `data/customer-tag-types.json` | `src/lib/customer-tags-storage.ts` | `string[]` of custom tag names |
 | `data/product-categories.json` | `src/lib/product-categories-storage.ts` | `{ "Product Title": "Category" }` |
+| `data/product-fit-notes.json` | `src/lib/product-fit-notes-storage.ts` | `{ productId: { text, status: 'draft'\|'published', updatedAt } }` — draft state + mirror of the published `custom.fit_note` metafield |
 | `data/tickets.json` | `src/lib/cs-storage.ts` | CS ticket array |
 | `data/macros.json` | `src/lib/cs-storage.ts` | CS macro array |
 | `data/ms-tokens.json` | `src/lib/ms-graph.ts` | Microsoft OAuth tokens |
