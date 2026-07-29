@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import type { LucideIcon } from 'lucide-react'
-import { RefreshCw, AlertCircle, CheckCircle2, Truck, Clock, Mail, UserMinus, GitBranch, Inbox } from 'lucide-react'
+import { RefreshCw, AlertCircle, AlertTriangle, CheckCircle2, Truck, Clock, Mail, UserMinus, GitBranch, Inbox } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
-import { isSoldOutLive, getStalledUnitsSummary } from '@/lib/product-metrics'
+import { isSoldOutLive, getStalledUnitsSummary, getLowRunwaySummary } from '@/lib/product-metrics'
 import { computeRFM } from '@/lib/rfm'
 import { DEMO_DELIVERABILITY_TREND, type DemoDeliverabilityPoint } from '@/lib/email-performance-demo'
 import type { EnrichedCustomer, CSTicket, LateShipment, ProductSummary } from '@/types'
@@ -35,7 +35,7 @@ function fmt(n: number, currency: string) {
 
 interface AttentionFeedProps {
   onGoToLateShipments?: () => void
-  onGoToProductsFiltered?: (filter: 'soldout' | 'stalled') => void
+  onGoToProductsFiltered?: (filter: 'soldout' | 'stalled' | 'lowrunway') => void
   onGoToEmailDeliverability?: () => void
   onGoToCustomerIntelligenceRFM?: () => void
   onGoToCustomerJourney?: () => void
@@ -169,6 +169,7 @@ export default function AttentionFeed({
   )
   const stalledSummary = useMemo(() => getStalledUnitsSummary(products), [products])
   const soldOutCount = useMemo(() => products.filter(isSoldOutLive).length, [products])
+  const lowRunwaySummary = useMemo(() => getLowRunwaySummary(products), [products])
 
   const entries = useMemo(() => {
     const list: FeedEntry[] = []
@@ -198,6 +199,20 @@ export default function AttentionFeed({
         monetaryValue: stalledSummary.potentialRevenue,
         countValue: stalledSummary.units,
         onClick: () => onGoToProductsFiltered?.('stalled'),
+      })
+    }
+
+    if (!productsUnavailable && lowRunwaySummary.count > 0) {
+      list.push({
+        key: 'low-runway',
+        icon: AlertTriangle,
+        tone: 'danger',
+        text: `${lowRunwaySummary.count} product${lowRunwaySummary.count !== 1 ? 's' : ''} at risk of stockout`,
+        detail: 'Predictive Stockout',
+        valueLabel: `${fmt(lowRunwaySummary.revenueAtRisk, currency)} at risk`,
+        monetaryValue: lowRunwaySummary.revenueAtRisk,
+        countValue: lowRunwaySummary.count,
+        onClick: () => onGoToProductsFiltered?.('lowrunway'),
       })
     }
 
@@ -280,7 +295,7 @@ export default function AttentionFeed({
     })
   }, [
     lateUnavailable, lateCount, lateValue, currency, onGoToLateShipments,
-    productsUnavailable, stalledSummary, soldOutCount, onGoToProductsFiltered,
+    productsUnavailable, stalledSummary, soldOutCount, lowRunwaySummary, onGoToProductsFiltered,
     deliverabilityFlag, onGoToEmailDeliverability,
     atRiskCount, onGoToCustomerIntelligenceRFM,
     unmatchedTransitions, onGoToCustomerJourney,

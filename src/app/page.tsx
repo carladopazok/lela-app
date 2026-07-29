@@ -20,7 +20,7 @@ export default function Home() {
   const [openReplyBody, setOpenReplyBody] = useState<string | null>(null)
   const [openCustomerEmail, setOpenCustomerEmail] = useState<string | null>(null)
   const [openProductId, setOpenProductId] = useState<number | null>(null)
-  const [productsFilter, setProductsFilter] = useState<'soldout' | 'stalled' | null>(null)
+  const [productsFilter, setProductsFilter] = useState<'soldout' | 'stalled' | 'lowrunway' | null>(null)
   const [productsSort, setProductsSort] = useState<'bestselling' | null>(null)
   const [customerIntelInitialView, setCustomerIntelInitialView] = useState<'journey' | 'rfm' | null>(null)
   const [emailPerfInitialView, setEmailPerfInitialView] = useState<'attribution' | 'deliverability' | null>(null)
@@ -52,7 +52,7 @@ export default function Home() {
     goToSection('products-inventory')
   }
 
-  function goToProductsFiltered(filter: 'soldout' | 'stalled') {
+  function goToProductsFiltered(filter: 'soldout' | 'stalled' | 'lowrunway') {
     setProductsFilter(filter)
     goToSection('products-inventory', true)
   }
@@ -97,7 +97,7 @@ export default function Home() {
     goToSection('late-shipments')
   }
 
-  function goToProductsFilteredFromFeed(filter: 'soldout' | 'stalled') {
+  function goToProductsFilteredFromFeed(filter: 'soldout' | 'stalled' | 'lowrunway') {
     setProductsFilter(filter)
     goToSection('products-inventory')
   }

@@ -1,6 +1,8 @@
 import type { ProductSummary } from '@/types'
 
 export const STALLED_DAYS = 90
+export const MIN_UNITS_FOR_RUNWAY = 3
+export const LOW_RUNWAY_THRESHOLD_DAYS = 7
 
 export function daysSince(iso: string): number {
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
@@ -31,6 +33,35 @@ export function getStalledUnitsSummary(products: ProductSummary[]): StalledUnits
   const units = list.reduce((s, p) => s + (p.inventoryQuantity ?? 0), 0)
   const potentialRevenue = list.reduce((s, p) => s + (p.price ?? 0) * (p.inventoryQuantity ?? 0), 0)
   return { units, potentialRevenue }
+}
+
+// Days until stockout at recent velocity. Requires enough trailing-30-day sales for the
+// estimate to mean something (MIN_UNITS_FOR_RUNWAY) — below that, a single stray sale could
+// swing the number wildly. Null (not 0, not Infinity) for anything unmeasurable: no catalog
+// data, already sold out (covered by isSoldOutLive instead), or too little recent velocity.
+export function getRunwayDays(p: ProductSummary): number | null {
+  if (p.inventoryQuantity == null || p.inventoryQuantity <= 0) return null
+  if (p.unitsSoldMonth < MIN_UNITS_FOR_RUNWAY) return null
+  const dailyVelocity = p.unitsSoldMonth / 30
+  return Math.round(p.inventoryQuantity / dailyVelocity)
+}
+
+export function isLowRunway(p: ProductSummary): boolean {
+  const runway = getRunwayDays(p)
+  return runway != null && runway < LOW_RUNWAY_THRESHOLD_DAYS
+}
+
+export interface LowRunwaySummary {
+  count: number
+  revenueAtRisk: number
+}
+
+// Revenue at risk = On Hand × Price across flagged products — same proxy pattern as
+// getStalledUnitsSummary's potentialRevenue, ranked for the Attention Feed.
+export function getLowRunwaySummary(products: ProductSummary[]): LowRunwaySummary {
+  const list = products.filter(isLowRunway)
+  const revenueAtRisk = list.reduce((s, p) => s + (p.price ?? 0) * (p.inventoryQuantity ?? 0), 0)
+  return { count: list.length, revenueAtRisk }
 }
 
 export interface BestSeller {

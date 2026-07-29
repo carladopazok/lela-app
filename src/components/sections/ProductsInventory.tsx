@@ -18,12 +18,15 @@ import {
 } from 'recharts'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
-import { STALLED_DAYS, daysSince, isStalled, isSoldOutLive, getStalledUnitsSummary } from '@/lib/product-metrics'
+import {
+  STALLED_DAYS, LOW_RUNWAY_THRESHOLD_DAYS, daysSince, isStalled, isSoldOutLive,
+  getStalledUnitsSummary, getRunwayDays, isLowRunway, getLowRunwaySummary,
+} from '@/lib/product-metrics'
 import { QUALIFYING_RETURN_REASONS } from '@/lib/shopify-returns'
 import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry } from '@/types'
 
-type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk'
-type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status'
+type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
+type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status' | 'runway'
 type SortDir = 'asc' | 'desc'
 type StatusBadge = 'bestseller' | 'soldout' | 'stalled' | null
 
@@ -338,6 +341,8 @@ interface ResolvedRow {
   returnRate: number | null
   returnFlagged: boolean
   fitNote: FitNoteEntry | null
+  runwayDays: number | null
+  lowRunway: boolean
 }
 
 const BADGE_STYLES: Record<Exclude<StatusBadge, null>, { label: string; className: string }> = {
@@ -1225,6 +1230,14 @@ function ProductRow({
                   </button>
                 )}
                 {row.fitNote && <FitNoteStatusPill entry={row.fitNote} onClick={onToggleFitNoteExpand} />}
+                {row.lowRunway && (
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap bg-red-50 text-red-600 border-red-200"
+                    title={`Estimated to sell out in under ${LOW_RUNWAY_THRESHOLD_DAYS} days at recent sales velocity`}
+                  >
+                    Low runway
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-1.5 mt-1">
                 <span className="text-[10px] text-charcoal-300 uppercase tracking-wide">Cost:</span>
@@ -1250,6 +1263,15 @@ function ProductRow({
                 <Mail size={10} />
               </a>
             </div>
+          )}
+        </td>
+        <td className="py-3 px-4 text-right whitespace-nowrap">
+          {row.runwayDays != null ? (
+            <p className={`text-sm ${row.lowRunway ? 'font-semibold text-red-600' : 'text-charcoal-700'}`}>
+              ~{row.runwayDays.toLocaleString()}d left
+            </p>
+          ) : (
+            <p className="text-sm text-charcoal-300">—</p>
           )}
         </td>
         <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">{p.price != null ? money(p.price) : '—'}</td>
@@ -1316,7 +1338,7 @@ function ProductRow({
       </tr>
       {!soldOut && expanded && (
         <tr>
-          <td colSpan={4} className="pb-3">
+          <td colSpan={5} className="pb-3">
             <StalledCampaignPanel
               product={p}
               currency={currency}
@@ -1337,14 +1359,14 @@ function ProductRow({
       )}
       {row.returnFlagged && returnsExpanded && (
         <tr>
-          <td colSpan={4} className="pb-3">
+          <td colSpan={5} className="pb-3">
             <ReturnReasonsPanel product={p} fitNote={row.fitNote} onAddFitNote={onToggleFitNoteExpand} />
           </td>
         </tr>
       )}
       {p.productId != null && fitNoteExpanded && (
         <tr>
-          <td colSpan={4} className="pb-3">
+          <td colSpan={5} className="pb-3">
             <FitNoteEditor
               product={p}
               entry={row.fitNote}
@@ -1359,7 +1381,7 @@ function ProductRow({
       )}
       {p.hasSoldOutVariant && restockExpanded && (
         <tr>
-          <td colSpan={4} className="pb-3">
+          <td colSpan={5} className="pb-3">
             <RestockSignupPanel
               product={p}
               data={restockData}
@@ -1385,7 +1407,7 @@ export default function ProductsInventory({
 }: {
   openProductId?: number | null
   onOpenProductHandled?: () => void
-  initialFilter?: 'soldout' | 'stalled' | null
+  initialFilter?: 'soldout' | 'stalled' | 'lowrunway' | null
   onInitialFilterHandled?: () => void
   initialSort?: ProductSortKey | null
   onInitialSortHandled?: () => void
@@ -1830,6 +1852,8 @@ export default function ProductsInventory({
 
   const returnFlaggedProducts = useMemo(() => products.filter((p) => p.returnFlagged), [products])
 
+  const lowRunwaySummary = useMemo(() => getLowRunwaySummary(products), [products])
+
   const stalledSummary = useMemo(() => {
     const list = products.filter((p) => isStalled(p, STALLED_DAYS))
     const value = list.reduce((s, p) => {
@@ -1859,6 +1883,7 @@ export default function ProductsInventory({
     if (activeFilter === 'soldout') list = list.filter(isSoldOutLive)
     else if (activeFilter === 'stalled') list = list.filter((p) => isStalled(p, STALLED_DAYS))
     else if (activeFilter === 'returnrisk') list = list.filter((p) => p.returnFlagged)
+    else if (activeFilter === 'lowrunway') list = list.filter(isLowRunway)
 
     const q = debouncedQuery.trim().toLowerCase()
     if (q) list = list.filter((p) => p.title.toLowerCase().includes(q))
@@ -1891,6 +1916,7 @@ export default function ProductsInventory({
         case 'onhand': cmp = (a.inventoryQuantity ?? -Infinity) - (b.inventoryQuantity ?? -Infinity); break
         case 'price': cmp = (a.price ?? -Infinity) - (b.price ?? -Infinity); break
         case 'status': cmp = statusRankFor(a) - statusRankFor(b); break
+        case 'runway': cmp = (getRunwayDays(a) ?? Infinity) - (getRunwayDays(b) ?? Infinity); break
         default: cmp = 0
       }
       return sortDir === 'asc' ? cmp : -cmp
@@ -1917,6 +1943,8 @@ export default function ProductsInventory({
         returnRate: p.returnRate,
         returnFlagged: p.returnFlagged,
         fitNote: fitNoteFor(p),
+        runwayDays: getRunwayDays(p),
+        lowRunway: isLowRunway(p),
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2025,6 +2053,15 @@ export default function ProductsInventory({
               active={activeFilter === 'returnrisk'}
               onClick={() => setActiveFilter((f) => (f === 'returnrisk' ? 'all' : 'returnrisk'))}
             />
+            <KpiCard
+              icon={<AlertTriangle size={12} />}
+              label="Low Runway"
+              value={lowRunwaySummary.count.toLocaleString()}
+              sub={`${money(lowRunwaySummary.revenueAtRisk)} revenue at risk`}
+              footnote={`Estimated to sell out in under ${LOW_RUNWAY_THRESHOLD_DAYS} days at recent sales velocity. Requires enough recent sales to estimate.`}
+              active={activeFilter === 'lowrunway'}
+              onClick={() => setActiveFilter((f) => (f === 'lowrunway' ? 'all' : 'lowrunway'))}
+            />
           </div>
 
           {/* ─── Toolbar ─────────────────────────────────────────────────── */}
@@ -2072,6 +2109,7 @@ export default function ProductsInventory({
                     <tr className="text-left text-xs text-charcoal-400 uppercase tracking-wide border-b border-sand-200">
                       <th className="pb-3 pr-4 font-medium">Product</th>
                       <SortableTh label="On Hand" sortKeyValue="onhand" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+                      <SortableTh label="Runway" sortKeyValue="runway" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
                       <SortableTh label="Price" sortKeyValue="price" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
                       <SortableTh label="Status / Action" sortKeyValue="status" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
                     </tr>
