@@ -23,6 +23,7 @@ import {
   getStalledUnitsSummary, getRunwayDays, isLowRunway, getLowRunwaySummary,
 } from '@/lib/product-metrics'
 import { QUALIFYING_RETURN_REASONS } from '@/lib/shopify-returns'
+import { LOW_STOCK_TAG, RESTOCK_EARLY_TAG, type ToggleableProductTag } from '@/lib/product-tags'
 import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
@@ -343,6 +344,8 @@ interface ResolvedRow {
   fitNote: FitNoteEntry | null
   runwayDays: number | null
   lowRunway: boolean
+  lowStockFlagged: boolean
+  restockSignupsEarlyEnabled: boolean
 }
 
 const BADGE_STYLES: Record<Exclude<StatusBadge, null>, { label: string; className: string }> = {
@@ -814,6 +817,82 @@ function RestockSignupPanel({
   )
 }
 
+// Stockout Actions panel behind the "Low runway" flag — two 1-click Shopify product tags.
+// Neither writes local state: Shopify's own tags are the source of truth (no draft concept
+// like Fit Note needs), so toggling just re-fetches the resulting tag list from the PATCH.
+function StockGuardPanel({
+  product,
+  lowStockFlagged,
+  restockSignupsEarlyEnabled,
+  lowStockBusy,
+  restockEarlyBusy,
+  lowStockError,
+  restockEarlyError,
+  onToggleTag,
+}: {
+  product: ProductSummary
+  lowStockFlagged: boolean
+  restockSignupsEarlyEnabled: boolean
+  lowStockBusy: boolean
+  restockEarlyBusy: boolean
+  lowStockError?: string
+  restockEarlyError?: string
+  onToggleTag: (tag: ToggleableProductTag, enabled: boolean) => void
+}) {
+  if (product.productId == null) {
+    return (
+      <div className="bg-sand-50 rounded-xl p-4 mt-2">
+        <p className="text-sm text-charcoal-400 italic">
+          Stockout actions need full catalog access (a Shopify reconnect) — this product doesn&apos;t have a Shopify
+          product id yet.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-sand-50 rounded-xl p-4 mt-2 space-y-4">
+      <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400">Stockout Actions</p>
+
+      <div className="flex items-start gap-3">
+        <button
+          onClick={() => onToggleTag(LOW_STOCK_TAG, !lowStockFlagged)}
+          disabled={lowStockBusy}
+          className={`shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-50
+            ${lowStockFlagged ? 'bg-terracotta-500 text-white border-terracotta-500' : 'border-sand-300 text-charcoal-600 hover:border-terracotta-300'}`}
+        >
+          {lowStockBusy && <Loader2 size={11} className="animate-spin" />}
+          {lowStockFlagged ? 'Low Stock Flagged ✓' : 'Flag Low Stock'}
+        </button>
+        <p className="text-[11px] text-charcoal-400 flex-1">
+          Tags this product <code>{LOW_STOCK_TAG}</code> in Shopify. Syncs automatically to Omnisend&apos;s product
+          catalog via the store&apos;s Shopify↔Omnisend integration — but excluding it from active flow
+          &quot;recommended product&quot; blocks still has to be done manually inside Omnisend&apos;s flow editor,
+          filtering on this tag.
+        </p>
+      </div>
+      {lowStockError && <p className="text-xs text-red-500">{lowStockError}</p>}
+
+      <div className="flex items-start gap-3">
+        <button
+          onClick={() => onToggleTag(RESTOCK_EARLY_TAG, !restockSignupsEarlyEnabled)}
+          disabled={restockEarlyBusy}
+          className={`shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-50
+            ${restockSignupsEarlyEnabled ? 'bg-terracotta-500 text-white border-terracotta-500' : 'border-sand-300 text-charcoal-600 hover:border-terracotta-300'}`}
+        >
+          {restockEarlyBusy && <Loader2 size={11} className="animate-spin" />}
+          {restockSignupsEarlyEnabled ? 'Early Signups Enabled ✓' : 'Enable Restock Signups Early'}
+        </button>
+        <p className="text-[11px] text-charcoal-400 flex-1">
+          Tags this product <code>{RESTOCK_EARLY_TAG}</code> in Shopify and opens the Restock Signups panel below even
+          though nothing is sold out yet — lets shoppers join the waitlist before this piece actually runs out.
+        </p>
+      </div>
+      {restockEarlyError && <p className="text-xs text-red-500">{restockEarlyError}</p>}
+    </div>
+  )
+}
+
 // Shopify's ReturnReason enum → the wording used in the store's own returns portal. UNKNOWN is
 // what we substitute when Shopify reports no reason at all (see shopify-returns.ts).
 const RETURN_REASON_LABELS: Record<string, string> = {
@@ -1156,6 +1235,13 @@ function ProductRow({
   onPublishFitNote,
   onUnpublishFitNote,
   onDeleteFitNoteDraft,
+  stockActionsExpanded,
+  onToggleStockActionsExpand,
+  lowStockBusy,
+  restockEarlyBusy,
+  lowStockError,
+  restockEarlyError,
+  onToggleProductTag,
 }: {
   row: ResolvedRow
   index: number
@@ -1197,6 +1283,13 @@ function ProductRow({
   onPublishFitNote: (productId: number, text: string) => Promise<void>
   onUnpublishFitNote: (productId: number) => Promise<void>
   onDeleteFitNoteDraft: (productId: number) => Promise<void>
+  stockActionsExpanded: boolean
+  onToggleStockActionsExpand: () => void
+  lowStockBusy: boolean
+  restockEarlyBusy: boolean
+  lowStockError?: string
+  restockEarlyError?: string
+  onToggleProductTag: (tag: ToggleableProductTag, enabled: boolean) => void
 }) {
   const { product: p, badge, isSoldOutLive: soldOut } = row
   function money(n: number) { return fmt(n, currency, locale) }
@@ -1246,12 +1339,17 @@ function ProductRow({
                 )}
                 {row.fitNote && <FitNoteStatusPill entry={row.fitNote} onClick={onToggleFitNoteExpand} />}
                 {row.lowRunway && (
-                  <span
-                    className="text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap bg-red-50 text-red-600 border-red-200"
-                    title={`Estimated to sell out in under ${LOW_RUNWAY_THRESHOLD_DAYS} days at recent sales velocity`}
+                  <button
+                    onClick={onToggleStockActionsExpand}
+                    className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap transition-colors
+                      ${stockActionsExpanded
+                        ? 'bg-red-100 text-red-700 border-red-300'
+                        : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100 hover:border-red-300'}`}
+                    title={`Estimated to sell out in under ${LOW_RUNWAY_THRESHOLD_DAYS} days at recent sales velocity — click for stockout actions`}
                   >
                     Low runway
-                  </span>
+                    <ChevronDown size={10} className={`transition-transform ${stockActionsExpanded ? 'rotate-180' : ''}`} />
+                  </button>
                 )}
               </div>
               <div className="flex items-center gap-1.5 mt-1">
@@ -1337,7 +1435,7 @@ function ProductRow({
                 <ChevronDown size={11} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
               </button>
             )}
-            {p.hasSoldOutVariant && (
+            {(p.hasSoldOutVariant || row.restockSignupsEarlyEnabled) && (
               <button
                 onClick={onToggleRestockExpand}
                 className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-colors
@@ -1394,7 +1492,7 @@ function ProductRow({
           </td>
         </tr>
       )}
-      {p.hasSoldOutVariant && restockExpanded && (
+      {(p.hasSoldOutVariant || row.restockSignupsEarlyEnabled) && restockExpanded && (
         <tr>
           <td colSpan={5} className="pb-3">
             <RestockSignupPanel
@@ -1403,6 +1501,22 @@ function ProductRow({
               loading={restockLoading}
               error={restockError}
               onCreateSegment={onCreateRestockSegment}
+            />
+          </td>
+        </tr>
+      )}
+      {row.lowRunway && stockActionsExpanded && (
+        <tr>
+          <td colSpan={5} className="pb-3">
+            <StockGuardPanel
+              product={p}
+              lowStockFlagged={row.lowStockFlagged}
+              restockSignupsEarlyEnabled={row.restockSignupsEarlyEnabled}
+              lowStockBusy={lowStockBusy}
+              restockEarlyBusy={restockEarlyBusy}
+              lowStockError={lowStockError}
+              restockEarlyError={restockEarlyError}
+              onToggleTag={onToggleProductTag}
             />
           </td>
         </tr>
@@ -1564,6 +1678,58 @@ export default function ProductsInventory({
       delete next[String(productId)]
       return next
     })
+  }
+
+  // Stockout Actions — two 1-click Shopify product tags (lela-low-stock, lela-restock-early).
+  // No local draft state like Fit Note needs: Shopify's own tags are the source of truth, so
+  // toggling just re-fetches the resulting tag list from the PATCH response.
+  const [stockActionsExpandedIds, setStockActionsExpandedIds] = useState<Set<number>>(new Set())
+  const [tagOverrides, setTagOverrides] = useState<Record<number, { lowStockFlagged?: boolean; restockSignupsEarlyEnabled?: boolean }>>({})
+  const [tagToggleBusy, setTagToggleBusy] = useState<Record<string, boolean>>({}) // key: `${productId}:${tag}`
+  const [tagToggleErrors, setTagToggleErrors] = useState<Record<string, string>>({})
+
+  function toggleStockActionsExpand(productId: number | null) {
+    if (productId == null) return
+    setStockActionsExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(productId)) next.delete(productId)
+      else next.add(productId)
+      return next
+    })
+  }
+
+  async function handleToggleProductTag(product: ProductSummary, tag: ToggleableProductTag, enabled: boolean) {
+    if (product.productId == null) return
+    const pid = product.productId
+    const key = `${pid}:${tag}`
+    setTagToggleBusy((prev) => ({ ...prev, [key]: true }))
+    setTagToggleErrors((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+    try {
+      const res = await fetch(`/api/shopify/products/${pid}/tags`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag, enabled }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Failed to update tag')
+      const tags: string[] = data.tags ?? []
+      setTagOverrides((prev) => ({
+        ...prev,
+        [pid]: { lowStockFlagged: tags.includes(LOW_STOCK_TAG), restockSignupsEarlyEnabled: tags.includes(RESTOCK_EARLY_TAG) },
+      }))
+    } catch (e) {
+      setTagToggleErrors((prev) => ({ ...prev, [key]: e instanceof Error ? e.message : 'Failed to update tag' }))
+    } finally {
+      setTagToggleBusy((prev) => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+    }
   }
 
   async function load() {
@@ -1962,10 +2128,12 @@ export default function ProductsInventory({
         fitNote: fitNoteFor(p),
         runwayDays: getRunwayDays(p),
         lowRunway: isLowRunway(p),
+        lowStockFlagged: tagOverrides[p.productId ?? -1]?.lowStockFlagged ?? p.lowStockFlagged,
+        restockSignupsEarlyEnabled: tagOverrides[p.productId ?? -1]?.restockSignupsEarlyEnabled ?? p.restockSignupsEarlyEnabled,
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, fitNoteOverrides])
+  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, fitNoteOverrides, tagOverrides])
 
   return (
     <section className="max-w-full">
@@ -2149,6 +2317,11 @@ export default function ProductsInventory({
                       const restockLoading = pid != null && restockLoadingIds.has(pid)
                       const restockError = pid != null ? restockErrors[pid] ?? null : null
                       const fitNoteExpanded = pid != null && fitNoteExpandedIds.has(pid)
+                      const stockActionsExpanded = pid != null && stockActionsExpandedIds.has(pid)
+                      const lowStockBusy = pid != null && !!tagToggleBusy[`${pid}:${LOW_STOCK_TAG}`]
+                      const restockEarlyBusy = pid != null && !!tagToggleBusy[`${pid}:${RESTOCK_EARLY_TAG}`]
+                      const lowStockError = pid != null ? tagToggleErrors[`${pid}:${LOW_STOCK_TAG}`] : undefined
+                      const restockEarlyError = pid != null ? tagToggleErrors[`${pid}:${RESTOCK_EARLY_TAG}`] : undefined
                       return (
                         <ProductRow
                           key={p.title}
@@ -2192,6 +2365,13 @@ export default function ProductsInventory({
                           onPublishFitNote={handlePublishFitNote}
                           onUnpublishFitNote={handleUnpublishFitNote}
                           onDeleteFitNoteDraft={handleDeleteFitNoteDraft}
+                          stockActionsExpanded={stockActionsExpanded}
+                          onToggleStockActionsExpand={() => toggleStockActionsExpand(pid)}
+                          lowStockBusy={lowStockBusy}
+                          restockEarlyBusy={restockEarlyBusy}
+                          lowStockError={lowStockError}
+                          restockEarlyError={restockEarlyError}
+                          onToggleProductTag={(tag, enabled) => handleToggleProductTag(p, tag, enabled)}
                         />
                       )
                     })}

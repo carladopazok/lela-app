@@ -1,5 +1,11 @@
 {%- comment -%}
-  Back in Stock notify widget — reference only, not part of the Next.js build.
+  Back in Stock / Restock Signups notify widget — reference only, not part of the Next.js build.
+
+  Triggers in two cases:
+  1. The current variant is already sold out (variant.available == false).
+  2. Staff has flagged the product as low-runway from the dashboard's Products & Inventory
+     "Enable Restock Signups Early" action, which adds the `lela-restock-early` Shopify tag —
+     lets shoppers join the waitlist before the item actually sells out.
 
   Setup:
   1. Shopify admin → Online Store → Themes → Edit code → Snippets → Add a new snippet
@@ -13,17 +19,27 @@
      so the dashboard's CORS check allows this request through.
 {%- endcomment -%}
 
-{%- unless variant.available -%}
+{%- assign lela_sold_out = variant.available == false -%}
+{%- assign lela_restock_early = product.tags contains 'lela-restock-early' -%}
+{%- if lela_sold_out or lela_restock_early -%}
   <div
     class="back-in-stock"
     data-product-id="{{ product.id }}"
     data-variant-id="{{ variant.id }}"
     data-variant-title="{{ variant.title | escape }}"
   >
-    <p class="back-in-stock__label">This option is sold out.</p>
+    <p class="back-in-stock__label">
+      {%- if lela_sold_out -%}
+        This option is sold out.
+      {%- else -%}
+        This item is selling fast and may sell out soon.
+      {%- endif -%}
+    </p>
     <form class="back-in-stock__form">
       <input type="email" class="back-in-stock__email" placeholder="Your email" required>
-      <button type="submit" class="back-in-stock__submit">Notify me when back in stock</button>
+      <button type="submit" class="back-in-stock__submit">
+        {%- if lela_sold_out -%}Notify me when back in stock{%- else -%}Notify me if it sells out{%- endif -%}
+      </button>
     </form>
     <p class="back-in-stock__message" hidden></p>
   </div>
@@ -88,4 +104,4 @@
       });
     })();
   </script>
-{%- endunless -%}
+{%- endif -%}

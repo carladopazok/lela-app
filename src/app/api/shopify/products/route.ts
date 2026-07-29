@@ -4,8 +4,9 @@ import { createShopifyClient } from '@/lib/shopify'
 import { REVENUE_STATUSES } from '@/lib/shopify-constants'
 import { readProductCategories } from '@/lib/product-categories-storage'
 import { readProductCogs } from '@/lib/product-cogs-storage'
-import { readDummyOrders, readDummyReturns } from '@/lib/dummy-data'
+import { readDummyOrders, readDummyReturns, readDummyLowRunwayProducts } from '@/lib/dummy-data'
 import { fetchReturnBreakdownByTitle, aggregateReturnBreakdown } from '@/lib/shopify-returns'
+import { LOW_STOCK_TAG, RESTOCK_EARLY_TAG } from '@/lib/product-tags'
 import type { ReturnBreakdown } from '@/lib/shopify-returns'
 import type { ShopifyOrder, ShopifyProduct, ShopifyInventoryItem, ProductSummary } from '@/types'
 
@@ -98,7 +99,9 @@ export async function GET(req: NextRequest) {
     const { returnsByTitle } = returnsResult
     let returnsAvailable = returnsResult.returnsAvailable
 
-    if (req.nextUrl.searchParams.get('dummy') === '1') {
+    const isDummy = req.nextUrl.searchParams.get('dummy') === '1'
+
+    if (isDummy) {
       orders.push(...readDummyOrders())
       const dummyReturns = aggregateReturnBreakdown(readDummyReturns())
       for (const [title, dummy] of dummyReturns) {
@@ -215,6 +218,8 @@ export async function GET(req: NextRequest) {
           cogs: manualCogsEntry?.manualCogs ?? null,
           nativeCogs: firstVariant?.inventory_item_id != null ? inventoryItemCosts.get(firstVariant.inventory_item_id) ?? null : null,
           hasSoldOutVariant,
+          lowStockFlagged: tags.includes(LOW_STOCK_TAG),
+          restockSignupsEarlyEnabled: tags.includes(RESTOCK_EARLY_TAG),
           returnRate,
           returnFlagged,
           returnedUnits: returnedQty,
@@ -251,6 +256,8 @@ export async function GET(req: NextRequest) {
           cogs: null,
           nativeCogs: null,
           hasSoldOutVariant: false,
+          lowStockFlagged: false,
+          restockSignupsEarlyEnabled: false,
           returnRate,
           returnFlagged,
           returnedUnits: returnedQty,
@@ -258,6 +265,45 @@ export async function GET(req: NextRequest) {
           returnReasons: returnsAvailable && returns ? returns.byReason : null,
         }
       })
+    }
+
+    // Low Runway is the one flag dummy orders/returns can't demo by boosting a real product's
+    // stats — it also depends on live inventoryQuantity, which dummy data can't touch. So this
+    // injects small standalone products instead, with productId: null (same shape the
+    // order-derived fallback catalog already produces), so every existing null-productId UI
+    // fallback just works without special-casing.
+    if (isDummy) {
+      for (const d of readDummyLowRunwayProducts()) {
+        products.push({
+          title: d.title,
+          category: d.category,
+          imageUrl: null,
+          vendor: d.vendor,
+          unitsSold: d.unitsSold,
+          unitsSoldWeek: d.unitsSoldWeek,
+          unitsSoldMonth: d.unitsSoldMonth,
+          revenue: d.price * d.unitsSold,
+          ordersCount: d.unitsSold,
+          productId: null,
+          sku: null,
+          inventoryQuantity: d.inventoryQuantity,
+          status: null,
+          publishedAt: null,
+          createdAt: null,
+          price: d.price,
+          lastSoldAt: new Date(Date.now() - d.daysSinceLastSold * 86_400_000).toISOString(),
+          cogs: null,
+          nativeCogs: null,
+          hasSoldOutVariant: false,
+          lowStockFlagged: false,
+          restockSignupsEarlyEnabled: false,
+          returnRate: null,
+          returnFlagged: false,
+          returnedUnits: 0,
+          unitsSoldAllTime: d.unitsSoldAllTime,
+          returnReasons: null,
+        })
+      }
     }
 
     const { primary_locale, country_code } = shopResult.shop

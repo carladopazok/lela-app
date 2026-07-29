@@ -27,7 +27,7 @@ Required Shopify scopes: `read_orders, read_all_orders, read_customers, write_cu
 `read_all_orders` is mandatory — without it, orders older than 60 days are invisible.  
 `read_products` and `read_inventory` are granted (confirmed 2026-07-15) — the try/catch wrapping around `/products.json` fetches can stay as general defensive error handling, but isn't compensating for a missing scope anymore.  
 `read_returns` was added 2026-07-24 for the Product Health / return-rate flag (`src/lib/shopify-returns.ts`) — confirmed granted 2026-07-24.  
-`write_products` was already relied on by the product status toggle (`src/app/api/shopify/products/[id]/status/route.ts`) and is also used to write the `custom.fit_note` metafield (`src/app/api/shopify/products/[id]/fit-note/route.ts`) — confirmed granted 2026-07-28; was missing from this list even though both features depend on it.
+`write_products` was already relied on by the product status toggle (`src/app/api/shopify/products/[id]/status/route.ts`) and is also used to write the `custom.fit_note` metafield (`src/app/api/shopify/products/[id]/fit-note/route.ts`) — confirmed granted 2026-07-28; was missing from this list even though both features depend on it. Also used by the Products & Inventory "Stockout Actions" tag toggles (`lela-low-stock`, `lela-restock-early` — `src/lib/product-tags.ts`, `src/app/api/shopify/products/[id]/tags/route.ts`).
 
 ## Architecture
 
