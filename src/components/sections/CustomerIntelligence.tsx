@@ -353,6 +353,17 @@ function CustomerExpandedDetail({
                       ) : (
                         <span className="text-xs text-charcoal-600 flex-1 truncate">{p.title}</span>
                       )}
+                      {shop && p.productId != null && (
+                        <a
+                          href={`https://${shop}/admin/products/${p.productId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="View on Shopify"
+                          className="shrink-0 text-charcoal-300 hover:text-terracotta-500 transition-colors"
+                        >
+                          <ExternalLink size={10} />
+                        </a>
+                      )}
                       <span className="shrink-0 text-xs text-charcoal-400">×{p.qty}</span>
                     </div>
                     <div className="ml-10 mt-1">
@@ -517,6 +528,17 @@ function CustomerExpandedDetail({
                   </button>
                 ) : (
                   <span className="flex-1 min-w-0 text-xs text-charcoal-600 truncate">{p.title}</span>
+                )}
+                {shop && (
+                  <a
+                    href={`https://${shop}/admin/products/${p.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="View on Shopify"
+                    className="shrink-0 text-charcoal-300 hover:text-terracotta-500 transition-colors"
+                  >
+                    <ExternalLink size={10} />
+                  </a>
                 )}
                 {segmentAddedFor.has(p.id) ? (
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-olive-100 text-olive-600 shrink-0">Added</span>

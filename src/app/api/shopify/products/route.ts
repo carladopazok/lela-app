@@ -265,7 +265,7 @@ export async function GET(req: NextRequest) {
 
     // Hardcoded: the dashboard always displays amounts in EUR, regardless of what
     // Shopify's shop.json reports as the store's configured currency.
-    return NextResponse.json({ products, currency: 'EUR', locale, source, inventoryAvailable: source === 'catalog', returnsAvailable })
+    return NextResponse.json({ products, currency: 'EUR', locale, source, inventoryAvailable: source === 'catalog', returnsAvailable, shop: session.shop })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })

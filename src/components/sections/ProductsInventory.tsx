@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   RefreshCw, AlertCircle, Package, Check, X, Info, Boxes, XCircle, Clock, Mail, Loader2,
   Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, ArrowLeft, Users,
-  AlertTriangle,
+  AlertTriangle, ExternalLink,
 } from 'lucide-react'
 import {
   ResponsiveContainer,
@@ -1120,6 +1120,7 @@ function ProductRow({
   index,
   currency,
   locale,
+  shop,
   expanded,
   onToggleExpand,
   onAssignCategory,
@@ -1160,6 +1161,7 @@ function ProductRow({
   index: number
   currency: string
   locale: string
+  shop: string | null
   expanded: boolean
   onToggleExpand: () => void
   onAssignCategory: (title: string, category: string | null) => void
@@ -1207,7 +1209,20 @@ function ProductRow({
           <div className="flex items-center gap-2">
             <ProductThumb imageUrl={p.imageUrl} title={p.title} />
             <div className="min-w-0">
-              <p className="text-sm text-charcoal-700 truncate max-w-[220px]">{p.title}</p>
+              <div className="flex items-center gap-1">
+                <p className="text-sm text-charcoal-700 truncate max-w-[220px]">{p.title}</p>
+                {shop && p.productId != null && (
+                  <a
+                    href={`https://${shop}/admin/products/${p.productId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="View on Shopify"
+                    className="shrink-0 text-charcoal-300 hover:text-terracotta-500 transition-colors"
+                  >
+                    <ExternalLink size={11} />
+                  </a>
+                )}
+              </div>
               <div className="flex items-center gap-1.5 flex-wrap mt-1">
                 <CategoryEditor title={p.title} assignedCategory={row.category} onAssign={onAssignCategory} />
                 <StatusBadgePill badge={badge} />
@@ -1417,6 +1432,7 @@ export default function ProductsInventory({
   const [currency, setCurrency] = useState('EUR')
   const [locale, setLocale] = useState('en-US')
   const [source, setSource] = useState<'catalog' | 'orders'>('catalog')
+  const [shop, setShop] = useState<string | null>(null)
   const [inventoryAvailable, setInventoryAvailable] = useState(false)
   const [returnsAvailable, setReturnsAvailable] = useState(false)
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, string>>({})
@@ -1572,6 +1588,7 @@ export default function ProductsInventory({
       setSource(productsData.source ?? 'catalog')
       setInventoryAvailable(productsData.inventoryAvailable ?? false)
       setReturnsAvailable(productsData.returnsAvailable ?? false)
+      setShop(productsData.shop ?? null)
       setCategoryOverrides(categoriesData.categories ?? {})
       setCogsOverrides(cogsData.cogs ?? {})
       setFitNoteOverrides(fitNotesData.fitNotes ?? {})
@@ -2139,6 +2156,7 @@ export default function ProductsInventory({
                           index={i}
                           currency={currency}
                           locale={locale}
+                          shop={shop}
                           expanded={expanded}
                           onToggleExpand={() => toggleExpand(pid)}
                           onAssignCategory={handleCategoryAssigned}

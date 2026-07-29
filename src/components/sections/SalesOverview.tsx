@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, AlertCircle, Truck, Clock, ReceiptText } from 'lucide-react'
+import { RefreshCw, AlertCircle, Truck, Clock, ReceiptText, ExternalLink } from 'lucide-react'
 import StatCard from '@/components/ui/StatCard'
 import AttentionCard from '@/components/ui/AttentionCard'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
@@ -77,6 +77,7 @@ export default function SalesOverview({
   const [products, setProducts] = useState<ProductSummary[]>([])
   const [productsAvailable, setProductsAvailable] = useState(false)
   const [productsError, setProductsError] = useState<string | null>(null)
+  const [shop, setShop] = useState<string | null>(null)
 
   const [conversionRate, setConversionRate] = useState<number | null>(null)
   const [conversionSessions, setConversionSessions] = useState<number | null>(null)
@@ -129,6 +130,7 @@ export default function SalesOverview({
       if (!res.ok) throw new Error(data.error)
       setProducts(data.products ?? [])
       setProductsAvailable(data.inventoryAvailable ?? false)
+      setShop(data.shop ?? null)
     } catch (e) {
       setProductsError(e instanceof Error ? e.message : 'Failed to load')
     }
@@ -301,7 +303,20 @@ export default function SalesOverview({
                 : <div className="w-12 h-12 rounded-lg bg-sand-200" />}
               <div className="flex-1">
                 <p className="text-xs font-medium uppercase tracking-widest text-charcoal-400">Most sold product</p>
-                <p className="text-sm text-charcoal-700 mt-0.5">{bestSeller.title} · {bestSeller.unitsSoldWeek} sold</p>
+                <p className="text-sm text-charcoal-700 mt-0.5 flex items-center gap-1">
+                  {bestSeller.title} · {bestSeller.unitsSoldWeek} sold
+                  {shop && bestSeller.productId != null && (
+                    <a
+                      href={`https://${shop}/admin/products/${bestSeller.productId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="View on Shopify"
+                      className="shrink-0 text-charcoal-300 hover:text-terracotta-500 transition-colors"
+                    >
+                      <ExternalLink size={11} />
+                    </a>
+                  )}
+                </p>
               </div>
               <button
                 onClick={() => onGoToBestSellers?.()}
