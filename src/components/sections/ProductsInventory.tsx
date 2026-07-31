@@ -24,7 +24,7 @@ import {
 } from '@/lib/product-metrics'
 import { QUALIFYING_RETURN_REASONS } from '@/lib/shopify-returns'
 import { LOW_STOCK_TAG, RESTOCK_EARLY_TAG, type ToggleableProductTag } from '@/lib/product-tags'
-import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry } from '@/types'
+import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry, PreorderEntry } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
 type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status' | 'runway'
@@ -342,6 +342,7 @@ interface ResolvedRow {
   returnRate: number | null
   returnFlagged: boolean
   fitNote: FitNoteEntry | null
+  preorder: PreorderEntry | null
   runwayDays: number | null
   lowRunway: boolean
   lowStockFlagged: boolean
@@ -829,6 +830,8 @@ function StockGuardPanel({
   lowStockError,
   restockEarlyError,
   onToggleTag,
+  preorder,
+  onOpenPreorder,
 }: {
   product: ProductSummary
   lowStockFlagged: boolean
@@ -838,6 +841,8 @@ function StockGuardPanel({
   lowStockError?: string
   restockEarlyError?: string
   onToggleTag: (tag: ToggleableProductTag, enabled: boolean) => void
+  preorder: PreorderEntry | null
+  onOpenPreorder: () => void
 }) {
   if (product.productId == null) {
     return (
@@ -889,6 +894,21 @@ function StockGuardPanel({
         </p>
       </div>
       {restockEarlyError && <p className="text-xs text-red-500">{restockEarlyError}</p>}
+
+      <div className="flex items-start gap-3">
+        <button
+          onClick={onOpenPreorder}
+          className={`shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors
+            ${preorder ? 'bg-terracotta-500 text-white border-terracotta-500' : 'border-sand-300 text-charcoal-600 hover:border-terracotta-300'}`}
+        >
+          {preorder ? `Pre-order ${preorder.status === 'published' ? 'live ✓' : 'saved as draft'}` : 'Enable Pre-order'}
+        </button>
+        <p className="text-[11px] text-charcoal-400 flex-1">
+          Writes the product&apos;s <code>custom.preorder</code> metafield with a message shoppers see on the product
+          page — same mechanism as the Fit Note, so the storefront theme can display it identically. Publishing this
+          doesn&apos;t change inventory policy in Shopify; it&apos;s messaging only.
+        </p>
+      </div>
     </div>
   )
 }
@@ -1017,6 +1037,125 @@ function FitNoteEditor({
         onChange={(e) => setText(e.target.value)}
         rows={3}
         placeholder="e.g. This item tends to run small — consider sizing up."
+        className="w-full px-3 py-2 text-sm border border-sand-300 rounded-lg focus:outline-none focus:border-terracotta-400 resize-none"
+      />
+      <div className="flex items-center flex-wrap gap-2 mt-3">
+        <button
+          onClick={() => run('draft', () => onSaveDraft(productId, text))}
+          disabled={busy != null || !text.trim()}
+          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-sand-300 text-charcoal-600 hover:border-terracotta-300 hover:text-terracotta-600 transition-colors disabled:opacity-50"
+        >
+          {busy === 'draft' ? <Loader2 size={11} className="animate-spin" /> : null} Save as draft
+        </button>
+        <button
+          onClick={() => run('publish', () => onPublish(productId, text))}
+          disabled={busy != null || !text.trim()}
+          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-terracotta-500 text-white hover:bg-terracotta-600 transition-colors disabled:opacity-50"
+        >
+          {busy === 'publish' ? <Loader2 size={11} className="animate-spin" /> : null} Save &amp; Publish to Store
+        </button>
+        {entry?.status === 'published' && (
+          <button
+            onClick={() => run('unpublish', () => onUnpublish(productId))}
+            disabled={busy != null}
+            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+          >
+            {busy === 'unpublish' ? <Loader2 size={11} className="animate-spin" /> : null} Unpublish
+          </button>
+        )}
+        {entry?.status === 'draft' && (
+          <button
+            onClick={() => run('delete', () => onDeleteDraft(productId), true)}
+            disabled={busy != null}
+            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+          >
+            {busy === 'delete' ? <Loader2 size={11} className="animate-spin" /> : null} Delete draft
+          </button>
+        )}
+        <button onClick={onClose} className="text-xs px-2 py-1.5 text-charcoal-400 hover:text-charcoal-600">
+          Close
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
+    </div>
+  )
+}
+
+function PreorderStatusPill({ entry, onClick }: { entry: PreorderEntry; onClick: () => void }) {
+  const published = entry.status === 'published'
+  return (
+    <button
+      onClick={onClick}
+      className={`text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap transition-colors ${
+        published
+          ? 'bg-olive-100 text-olive-700 border-olive-300 hover:bg-olive-200'
+          : 'bg-sand-100 text-charcoal-500 border-sand-300 hover:bg-sand-200'
+      }`}
+      title={
+        published
+          ? 'Pre-order message is live on the product metafield — click to edit or unpublish'
+          : 'Draft pre-order message, not yet on the store — click to edit, publish, or delete'
+      }
+    >
+      Pre-order: {published ? 'published' : 'draft'}
+    </button>
+  )
+}
+
+function PreorderEditor({
+  product,
+  entry,
+  onSaveDraft,
+  onPublish,
+  onUnpublish,
+  onDeleteDraft,
+  onClose,
+}: {
+  product: ProductSummary
+  entry: PreorderEntry | null
+  onSaveDraft: (productId: number, text: string) => Promise<void>
+  onPublish: (productId: number, text: string) => Promise<void>
+  onUnpublish: (productId: number) => Promise<void>
+  onDeleteDraft: (productId: number) => Promise<void>
+  onClose: () => void
+}) {
+  const [text, setText] = useState(entry?.text ?? '')
+  const [busy, setBusy] = useState<'draft' | 'publish' | 'unpublish' | 'delete' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  if (product.productId == null) {
+    return (
+      <div className="bg-sand-50 rounded-xl p-4 mt-2">
+        <p className="text-sm text-charcoal-400 italic">
+          Pre-order needs full catalog access (a Shopify reconnect) — this product doesn&apos;t have a Shopify
+          product id yet.
+        </p>
+      </div>
+    )
+  }
+  const productId = product.productId
+
+  async function run(action: 'draft' | 'publish' | 'unpublish' | 'delete', fn: () => Promise<void>, closeAfter = false) {
+    setBusy(action)
+    setError(null)
+    try {
+      await fn()
+      if (closeAfter) onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="bg-sand-50 rounded-xl p-4 mt-2">
+      <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">Pre-order</p>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={3}
+        placeholder="e.g. Available for pre-order — ships within 2-3 weeks."
         className="w-full px-3 py-2 text-sm border border-sand-300 rounded-lg focus:outline-none focus:border-terracotta-400 resize-none"
       />
       <div className="flex items-center flex-wrap gap-2 mt-3">
@@ -1242,6 +1381,12 @@ function ProductRow({
   lowStockError,
   restockEarlyError,
   onToggleProductTag,
+  preorderExpanded,
+  onTogglePreorderExpand,
+  onSavePreorderDraft,
+  onPublishPreorder,
+  onUnpublishPreorder,
+  onDeletePreorderDraft,
 }: {
   row: ResolvedRow
   index: number
@@ -1290,6 +1435,12 @@ function ProductRow({
   lowStockError?: string
   restockEarlyError?: string
   onToggleProductTag: (tag: ToggleableProductTag, enabled: boolean) => void
+  preorderExpanded: boolean
+  onTogglePreorderExpand: () => void
+  onSavePreorderDraft: (productId: number, text: string) => Promise<void>
+  onPublishPreorder: (productId: number, text: string) => Promise<void>
+  onUnpublishPreorder: (productId: number) => Promise<void>
+  onDeletePreorderDraft: (productId: number) => Promise<void>
 }) {
   const { product: p, badge, isSoldOutLive: soldOut } = row
   function money(n: number) { return fmt(n, currency, locale) }
@@ -1338,6 +1489,7 @@ function ProductRow({
                   </button>
                 )}
                 {row.fitNote && <FitNoteStatusPill entry={row.fitNote} onClick={onToggleFitNoteExpand} />}
+                {row.preorder && <PreorderStatusPill entry={row.preorder} onClick={onTogglePreorderExpand} />}
                 {row.lowRunway && (
                   <button
                     onClick={onToggleStockActionsExpand}
@@ -1517,6 +1669,23 @@ function ProductRow({
               lowStockError={lowStockError}
               restockEarlyError={restockEarlyError}
               onToggleTag={onToggleProductTag}
+              preorder={row.preorder}
+              onOpenPreorder={onTogglePreorderExpand}
+            />
+          </td>
+        </tr>
+      )}
+      {p.productId != null && preorderExpanded && (
+        <tr>
+          <td colSpan={5} className="pb-3">
+            <PreorderEditor
+              product={p}
+              entry={row.preorder}
+              onSaveDraft={onSavePreorderDraft}
+              onPublish={onPublishPreorder}
+              onUnpublish={onUnpublishPreorder}
+              onDeleteDraft={onDeletePreorderDraft}
+              onClose={onTogglePreorderExpand}
             />
           </td>
         </tr>
@@ -1680,6 +1849,75 @@ export default function ProductsInventory({
     })
   }
 
+  // Pre-order — local draft state plus the published custom.preorder metafield status. Same
+  // shape as Fit Note above, entered from the Stockout Actions panel behind the Low Runway flag.
+  const [preorderOverrides, setPreorderOverrides] = useState<Record<string, PreorderEntry>>({})
+  const [preorderExpandedIds, setPreorderExpandedIds] = useState<Set<number>>(new Set())
+
+  function togglePreorderExpand(productId: number | null) {
+    if (productId == null) return
+    setPreorderExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(productId)) next.delete(productId)
+      else next.add(productId)
+      return next
+    })
+  }
+
+  function preorderFor(p: ProductSummary): PreorderEntry | null {
+    if (p.productId == null) return null
+    return preorderOverrides[String(p.productId)] ?? null
+  }
+
+  async function handleSavePreorderDraft(productId: number, text: string) {
+    const res = await fetch('/api/shopify/product-preorders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productId, text }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to save draft')
+    setPreorderOverrides((prev) => ({ ...prev, [String(productId)]: data.preorders[String(productId)] }))
+  }
+
+  async function handlePublishPreorder(productId: number, text: string) {
+    const res = await fetch(`/api/shopify/products/${productId}/preorder`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to publish pre-order')
+    setPreorderOverrides((prev) => ({ ...prev, [String(productId)]: data.preorder }))
+  }
+
+  async function handleUnpublishPreorder(productId: number) {
+    const res = await fetch(`/api/shopify/products/${productId}/preorder`, { method: 'DELETE' })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to unpublish pre-order')
+    setPreorderOverrides((prev) => {
+      const next = { ...prev }
+      if (data.preorder) next[String(productId)] = data.preorder
+      else delete next[String(productId)]
+      return next
+    })
+  }
+
+  async function handleDeletePreorderDraft(productId: number) {
+    const res = await fetch('/api/shopify/product-preorders', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productId }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to delete draft')
+    setPreorderOverrides((prev) => {
+      const next = { ...prev }
+      delete next[String(productId)]
+      return next
+    })
+  }
+
   // Stockout Actions — two 1-click Shopify product tags (lela-low-stock, lela-restock-early).
   // No local draft state like Fit Note needs: Shopify's own tags are the source of truth, so
   // toggling just re-fetches the resulting tag list from the PATCH response.
@@ -1736,17 +1974,19 @@ export default function ProductsInventory({
     setLoading(true)
     setError(null)
     try {
-      const [productsRes, categoriesRes, cogsRes, fitNotesRes] = await Promise.all([
+      const [productsRes, categoriesRes, cogsRes, fitNotesRes, preordersRes] = await Promise.all([
         fetch(withDummyParam('/api/shopify/products', includeDummy)),
         fetch('/api/shopify/product-categories'),
         fetch('/api/shopify/product-cogs'),
         fetch('/api/shopify/product-fit-notes'),
+        fetch('/api/shopify/product-preorders'),
       ])
       const productsData = await productsRes.json()
       if (!productsRes.ok) throw new Error(productsData.error)
       const categoriesData = await categoriesRes.json()
       const cogsData = await cogsRes.json()
       const fitNotesData = await fitNotesRes.json()
+      const preordersData = await preordersRes.json()
 
       setProducts(productsData.products ?? [])
       setCurrency(productsData.currency ?? 'EUR')
@@ -1758,6 +1998,7 @@ export default function ProductsInventory({
       setCategoryOverrides(categoriesData.categories ?? {})
       setCogsOverrides(cogsData.cogs ?? {})
       setFitNoteOverrides(fitNotesData.fitNotes ?? {})
+      setPreorderOverrides(preordersData.preorders ?? {})
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -2126,6 +2367,7 @@ export default function ProductsInventory({
         returnRate: p.returnRate,
         returnFlagged: p.returnFlagged,
         fitNote: fitNoteFor(p),
+        preorder: preorderFor(p),
         runwayDays: getRunwayDays(p),
         lowRunway: isLowRunway(p),
         lowStockFlagged: tagOverrides[p.productId ?? -1]?.lowStockFlagged ?? p.lowStockFlagged,
@@ -2133,7 +2375,7 @@ export default function ProductsInventory({
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, fitNoteOverrides, tagOverrides])
+  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, fitNoteOverrides, preorderOverrides, tagOverrides])
 
   return (
     <section className="max-w-full">
@@ -2317,6 +2559,7 @@ export default function ProductsInventory({
                       const restockLoading = pid != null && restockLoadingIds.has(pid)
                       const restockError = pid != null ? restockErrors[pid] ?? null : null
                       const fitNoteExpanded = pid != null && fitNoteExpandedIds.has(pid)
+                      const preorderExpanded = pid != null && preorderExpandedIds.has(pid)
                       const stockActionsExpanded = pid != null && stockActionsExpandedIds.has(pid)
                       const lowStockBusy = pid != null && !!tagToggleBusy[`${pid}:${LOW_STOCK_TAG}`]
                       const restockEarlyBusy = pid != null && !!tagToggleBusy[`${pid}:${RESTOCK_EARLY_TAG}`]
@@ -2372,6 +2615,12 @@ export default function ProductsInventory({
                           lowStockError={lowStockError}
                           restockEarlyError={restockEarlyError}
                           onToggleProductTag={(tag, enabled) => handleToggleProductTag(p, tag, enabled)}
+                          preorderExpanded={preorderExpanded}
+                          onTogglePreorderExpand={() => togglePreorderExpand(pid)}
+                          onSavePreorderDraft={handleSavePreorderDraft}
+                          onPublishPreorder={handlePublishPreorder}
+                          onUnpublishPreorder={handleUnpublishPreorder}
+                          onDeletePreorderDraft={handleDeletePreorderDraft}
                         />
                       )
                     })}

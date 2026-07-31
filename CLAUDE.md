@@ -27,7 +27,7 @@ Required Shopify scopes: `read_orders, read_all_orders, read_customers, write_cu
 `read_all_orders` is mandatory — without it, orders older than 60 days are invisible.  
 `read_products` and `read_inventory` are granted (confirmed 2026-07-15) — the try/catch wrapping around `/products.json` fetches can stay as general defensive error handling, but isn't compensating for a missing scope anymore.  
 `read_returns` was added 2026-07-24 for the Product Health / return-rate flag (`src/lib/shopify-returns.ts`) — confirmed granted 2026-07-24.  
-`write_products` was already relied on by the product status toggle (`src/app/api/shopify/products/[id]/status/route.ts`) and is also used to write the `custom.fit_note` metafield (`src/app/api/shopify/products/[id]/fit-note/route.ts`) — confirmed granted 2026-07-28; was missing from this list even though both features depend on it. Also used by the Products & Inventory "Stockout Actions" tag toggles (`lela-low-stock`, `lela-restock-early` — `src/lib/product-tags.ts`, `src/app/api/shopify/products/[id]/tags/route.ts`).
+`write_products` was already relied on by the product status toggle (`src/app/api/shopify/products/[id]/status/route.ts`) and is also used to write the `custom.fit_note` metafield (`src/app/api/shopify/products/[id]/fit-note/route.ts`) — confirmed granted 2026-07-28; was missing from this list even though both features depend on it. Also used by the Products & Inventory "Stockout Actions" tag toggles (`lela-low-stock`, `lela-restock-early` — `src/lib/product-tags.ts`, `src/app/api/shopify/products/[id]/tags/route.ts`) and by the `custom.preorder` metafield write (`src/app/api/shopify/products/[id]/preorder/route.ts`, added 2026-07-31 — same draft/publish pattern as Fit Note, entered from the Stockout Actions panel behind the Low Runway flag).
 
 ## Architecture
 
@@ -44,6 +44,7 @@ All routes: import `getSession` from `@/lib/session`, `createShopifyClient` from
 | `data/customer-tag-types.json` | `src/lib/customer-tags-storage.ts` | `string[]` of custom tag names |
 | `data/product-categories.json` | `src/lib/product-categories-storage.ts` | `{ "Product Title": "Category" }` |
 | `data/product-fit-notes.json` | `src/lib/product-fit-notes-storage.ts` | `{ productId: { text, status: 'draft'\|'published', updatedAt } }` — draft state + mirror of the published `custom.fit_note` metafield |
+| `data/product-preorders.json` | `src/lib/product-preorders-storage.ts` | `{ productId: { text, status: 'draft'\|'published', updatedAt } }` — draft state + mirror of the published `custom.preorder` metafield |
 | `data/tickets.json` | `src/lib/cs-storage.ts` | CS ticket array |
 | `data/macros.json` | `src/lib/cs-storage.ts` | CS macro array |
 | `data/ms-tokens.json` | `src/lib/ms-graph.ts` | Microsoft OAuth tokens |

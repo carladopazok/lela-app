@@ -291,6 +291,14 @@ export interface FitNoteEntry {
 
 export type FitNotesStore = Record<string, FitNoteEntry> // keyed by Shopify product id (string)
 
+export interface PreorderEntry {
+  text: string
+  status: 'draft' | 'published'
+  updatedAt: string
+}
+
+export type PreordersStore = Record<string, PreorderEntry> // keyed by Shopify product id (string)
+
 // ─── Back in Stock signups ──────────────────────────────────────────────────
 
 export interface BackInStockSignup {

@@ -2,7 +2,7 @@ import type { ProductSummary } from '@/types'
 
 export const STALLED_DAYS = 90
 export const MIN_UNITS_FOR_RUNWAY = 3
-export const LOW_RUNWAY_THRESHOLD_DAYS = 7
+export const LOW_RUNWAY_THRESHOLD_DAYS = 15
 
 export function daysSince(iso: string): number {
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
