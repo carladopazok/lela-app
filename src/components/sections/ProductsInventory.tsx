@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   RefreshCw, AlertCircle, Package, Check, X, Info, Boxes, XCircle, Clock, Mail, Loader2,
   Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, ArrowLeft, Users,
-  AlertTriangle, ExternalLink,
+  AlertTriangle, ExternalLink, Tag, Download,
 } from 'lucide-react'
 import {
   ResponsiveContainer,
@@ -37,6 +37,9 @@ const STATUS_RANK: Record<'bestseller' | 'soldout' | 'stalled' | 'none', number>
 
 const LOW_STOCK_THRESHOLD = 3
 const DISCOUNT_OPTIONS = [0, 0.2, 0.4, 0.6] as const
+// Stable reference for rows without an excluded-chips entry yet — avoids a fresh `new Set()`
+// on every render, which would otherwise defeat StalledCampaignPanel's unionIds memoization.
+const EMPTY_EXCLUDED_CHIPS: Set<string> = new Set()
 
 function fmt(n: number, currency: string, locale: string) {
   try {
@@ -46,6 +49,11 @@ function fmt(n: number, currency: string, locale: string) {
     // rather than throwing, so a formatting quirk never blanks out the whole page.
     return n.toLocaleString('en-US', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2 })
   }
+}
+
+function csvEscape(field: string): string {
+  if (/[",\n]/.test(field)) return `"${field.replace(/"/g, '""')}"`
+  return field
 }
 
 function formatDate(iso: string | null): string {
@@ -415,6 +423,15 @@ function StalledCampaignPanel({
   recomputingRelated,
   relatedComputedAt,
   onCreateSegment,
+  discount,
+  onDiscountChange,
+  customDiscountInput,
+  onCustomDiscountInputChange,
+  onCreateDiscount,
+  excludedChips,
+  onToggleChip,
+  conversionPercent,
+  onConversionPercentChange,
 }: {
   product: ProductSummary
   currency: string
@@ -429,25 +446,26 @@ function StalledCampaignPanel({
   recomputingRelated: boolean
   relatedComputedAt: string | null
   onCreateSegment: (product: ProductSummary, emails: string[]) => Promise<{ ok: boolean; message: string }>
+  discount: number
+  onDiscountChange: (v: number) => void
+  customDiscountInput: string
+  onCustomDiscountInputChange: (v: string) => void
+  onCreateDiscount: (product: ProductSummary, opts: { percentage: number; name: string; markdown: boolean }) => Promise<{ ok: boolean; message: string }>
+  excludedChips: Set<string>
+  onToggleChip: (id: string) => void
+  conversionPercent: number
+  onConversionPercentChange: (v: number) => void
 }) {
-  // All related-product chips start ON — an empty exclusion set reads as "everything included."
-  const [excludedChips, setExcludedChips] = useState<Set<string>>(new Set())
-  const [discount, setDiscount] = useState(0)
-  const [customDiscountInput, setCustomDiscountInput] = useState('')
-  const [conversionPercent, setConversionPercent] = useState(100)
   const [confirming, setConfirming] = useState(false)
   const [creating, setCreating] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [discountName, setDiscountName] = useState('')
+  const [applyMarkdown, setApplyMarkdown] = useState(false)
+  const [discountConfirming, setDiscountConfirming] = useState(false)
+  const [creatingDiscount, setCreatingDiscount] = useState(false)
+  const [discountResult, setDiscountResult] = useState<{ ok: boolean; message: string } | null>(null)
 
   function money(n: number) { return fmt(n, currency, locale) }
-  function toggleChip(id: string) {
-    setExcludedChips((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
 
   const audienceByChip = new Map((interestedData?.byRelatedProduct ?? []).map((e) => [e.relatedProductId, e.customerIds]))
 
@@ -494,6 +512,15 @@ function StalledCampaignPanel({
     setCreating(false)
   }
 
+  async function handleCreateDiscount() {
+    setCreatingDiscount(true)
+    setDiscountResult(null)
+    const outcome = await onCreateDiscount(product, { percentage: discount, name: discountName, markdown: applyMarkdown })
+    setDiscountResult(outcome)
+    if (outcome.ok) setDiscountConfirming(false)
+    setCreatingDiscount(false)
+  }
+
   return (
     <div className="bg-sand-50 rounded-xl p-4 mt-2">
       {/* Related products — toggle chips */}
@@ -524,7 +551,7 @@ function StalledCampaignPanel({
             return (
               <li key={`${entry.relationType}-${entry.relatedProductId}`}>
                 <button
-                  onClick={() => toggleChip(entry.relatedProductId)}
+                  onClick={() => onToggleChip(entry.relatedProductId)}
                   className={`text-xs px-2.5 py-1 rounded-full border transition-colors
                     ${on ? 'border-terracotta-400 bg-terracotta-100/40 text-terracotta-700' : 'border-sand-300 text-charcoal-400'}`}
                   title={entry.relationType === 'same-tag' ? 'Same Tag' : `Frequently Bought Together ×${entry.coPurchaseCount}`}
@@ -568,7 +595,7 @@ function StalledCampaignPanel({
           {DISCOUNT_OPTIONS.map((d) => (
             <button
               key={d}
-              onClick={() => { setDiscount(d); setCustomDiscountInput('') }}
+              onClick={() => { onDiscountChange(d); onCustomDiscountInputChange('') }}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all
                 ${discount === d && customDiscountInput === ''
                   ? 'bg-terracotta-500 text-white shadow-sm'
@@ -587,9 +614,9 @@ function StalledCampaignPanel({
               value={customDiscountInput}
               onChange={(e) => {
                 const raw = e.target.value
-                setCustomDiscountInput(raw)
+                onCustomDiscountInputChange(raw)
                 const v = parseFloat(raw)
-                if (Number.isFinite(v)) setDiscount(Math.max(0, Math.min(95, v)) / 100)
+                if (Number.isFinite(v)) onDiscountChange(Math.max(0, Math.min(95, v)) / 100)
               }}
               className={`w-11 px-1 py-0.5 text-xs rounded border-0 focus:outline-none focus:ring-1 focus:ring-terracotta-300
                 ${customDiscountInput !== '' ? 'bg-terracotta-400 text-white placeholder-terracotta-100' : 'bg-white text-charcoal-700'}`}
@@ -611,7 +638,7 @@ function StalledCampaignPanel({
             value={conversionPercent}
             onChange={(e) => {
               const v = parseFloat(e.target.value)
-              if (Number.isFinite(v)) setConversionPercent(Math.max(0, Math.min(100, v)))
+              if (Number.isFinite(v)) onConversionPercentChange(Math.max(0, Math.min(100, v)))
             }}
             className="w-14 text-sm text-charcoal-700 focus:outline-none"
           />
@@ -654,6 +681,74 @@ function StalledCampaignPanel({
             {buyers.toFixed(1)} buyer{buyers === 1 ? '' : 's'} × {discountedPrice != null ? money(discountedPrice) : '—'} — estimate, not guaranteed
           </p>
         </div>
+      </div>
+
+      {/* Create discount action — a real, live Shopify discount code (store-wide, scoped to
+          this product), with an option to also mark down the product's live price. */}
+      <div className="mb-5 pb-5 border-b border-sand-200">
+        {product.productId == null ? (
+          <p className="text-xs text-charcoal-400 italic">Shopify product id unavailable — can&apos;t create a discount for this item.</p>
+        ) : discount === 0 ? (
+          <p className="text-xs text-charcoal-400 italic">Select a discount % above to create it on Shopify.</p>
+        ) : discountConfirming ? (
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+            <p className="text-sm text-charcoal-700 mb-3">
+              This creates a real, live discount code on Shopify for <strong>{Math.round(discount * 100)}% off</strong> this
+              product — any customer can use it at checkout.
+            </p>
+            <label className="block text-xs text-charcoal-500 mb-1">Discount name</label>
+            <input
+              type="text"
+              value={discountName}
+              onChange={(e) => setDiscountName(e.target.value)}
+              placeholder={`${Math.round(discount * 100)}OFF`}
+              className="w-full mb-3 px-2.5 py-1.5 text-sm border border-sand-300 rounded-lg focus:outline-none focus:border-terracotta-400"
+            />
+            <label className="flex items-center gap-2 text-sm text-charcoal-700 mb-3">
+              <input
+                type="checkbox"
+                checked={applyMarkdown}
+                onChange={(e) => setApplyMarkdown(e.target.checked)}
+                className="rounded border-sand-300"
+              />
+              Also markdown this product&apos;s live price on Shopify to {discountedPrice != null ? money(discountedPrice) : '—'}
+            </label>
+            <div className="flex gap-2">
+              <button
+                onClick={handleCreateDiscount}
+                disabled={creatingDiscount || !discountName.trim()}
+                className="flex items-center gap-2 text-sm font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-4 py-2 rounded-lg transition-colors disabled:opacity-60"
+              >
+                {creatingDiscount && <Loader2 size={14} className="animate-spin" />}
+                Confirm & Create
+              </button>
+              <button
+                onClick={() => setDiscountConfirming(false)}
+                disabled={creatingDiscount}
+                className="text-sm text-charcoal-400 hover:text-charcoal-600 px-4 py-2"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => {
+              setDiscountName(`${Math.round(discount * 100)}OFF`)
+              setApplyMarkdown(false)
+              setDiscountConfirming(true)
+            }}
+            className="flex items-center gap-2 text-sm font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-4 py-2 rounded-lg transition-colors"
+          >
+            <Tag size={14} /> Create Discount for {Math.round(discount * 100)}%
+          </button>
+        )}
+
+        {discountResult && (
+          <p className={`flex items-center gap-2 text-sm mt-3 ${discountResult.ok ? 'text-olive-600' : 'text-red-600'}`}>
+            {discountResult.message}
+          </p>
+        )}
       </div>
 
       {/* Create segment action — builds the Omnisend audience; the actual campaign send
@@ -1360,6 +1455,15 @@ function ProductRow({
   recomputingRelated,
   relatedComputedAt,
   onCreateSegment,
+  discount,
+  onDiscountChange,
+  customDiscountInput,
+  onCustomDiscountInputChange,
+  onCreateDiscount,
+  excludedChips,
+  onToggleChip,
+  conversionPercent,
+  onConversionPercentChange,
   restockExpanded,
   onToggleRestockExpand,
   restockData,
@@ -1414,6 +1518,15 @@ function ProductRow({
   recomputingRelated: boolean
   relatedComputedAt: string | null
   onCreateSegment: (product: ProductSummary, emails: string[]) => Promise<{ ok: boolean; message: string }>
+  discount: number
+  onDiscountChange: (v: number) => void
+  customDiscountInput: string
+  onCustomDiscountInputChange: (v: string) => void
+  onCreateDiscount: (product: ProductSummary, opts: { percentage: number; name: string; markdown: boolean }) => Promise<{ ok: boolean; message: string }>
+  excludedChips: Set<string>
+  onToggleChip: (id: string) => void
+  conversionPercent: number
+  onConversionPercentChange: (v: number) => void
   restockExpanded: boolean
   onToggleRestockExpand: () => void
   restockData: BackInStockResponse | null
@@ -1618,6 +1731,15 @@ function ProductRow({
               recomputingRelated={recomputingRelated}
               relatedComputedAt={relatedComputedAt}
               onCreateSegment={onCreateSegment}
+              discount={discount}
+              onDiscountChange={onDiscountChange}
+              customDiscountInput={customDiscountInput}
+              onCustomDiscountInputChange={onCustomDiscountInputChange}
+              onCreateDiscount={onCreateDiscount}
+              excludedChips={excludedChips}
+              onToggleChip={onToggleChip}
+              conversionPercent={conversionPercent}
+              onConversionPercentChange={onConversionPercentChange}
             />
           </td>
         </tr>
@@ -1705,7 +1827,7 @@ export default function ProductsInventory({
 }: {
   openProductId?: number | null
   onOpenProductHandled?: () => void
-  initialFilter?: 'soldout' | 'stalled' | 'lowrunway' | null
+  initialFilter?: 'soldout' | 'stalled' | 'lowrunway' | 'returnrisk' | null
   onInitialFilterHandled?: () => void
   initialSort?: ProductSortKey | null
   onInitialSortHandled?: () => void
@@ -1751,6 +1873,15 @@ export default function ProductsInventory({
   const [confirmHideId, setConfirmHideId] = useState<number | null>(null)
   const [hidingId, setHidingId] = useState<number | null>(null)
   const [hideErrors, setHideErrors] = useState<Record<number, string>>({})
+
+  // Discount simulator state, lifted here (not local to StalledCampaignPanel) so a chosen
+  // discount % survives the row collapsing — the panel unmounts on collapse — and so the
+  // CSV export can read every stalled product's discount, not just the currently expanded one.
+  const [discountByProduct, setDiscountByProduct] = useState<Record<number, number>>({})
+  const [customDiscountInputByProduct, setCustomDiscountInputByProduct] = useState<Record<number, string>>({})
+  const [excludedChipsByProduct, setExcludedChipsByProduct] = useState<Record<number, Set<string>>>({})
+  const [conversionPercentByProduct, setConversionPercentByProduct] = useState<Record<number, number>>({})
+  const [exportingDiscountPlan, setExportingDiscountPlan] = useState(false)
 
   // Related products (shared cache, fetched once) + per-product interested-customers (lazy, cached)
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
@@ -2215,6 +2346,35 @@ export default function ProductsInventory({
     }
   }
 
+  async function handleCreateDiscount(
+    product: ProductSummary,
+    opts: { percentage: number; name: string; markdown: boolean },
+  ): Promise<{ ok: boolean; message: string }> {
+    if (product.productId == null) {
+      return { ok: false, message: 'Missing product id.' }
+    }
+    if (!opts.name.trim()) {
+      return { ok: false, message: 'A discount name is required.' }
+    }
+    try {
+      const res = await fetch(`/api/shopify/products/${product.productId}/create-discount`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(opts),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      return {
+        ok: true,
+        message: data.markdownApplied
+          ? `Discount code ${data.discountCode} created and price marked down on Shopify`
+          : `Discount code ${data.discountCode} created on Shopify`,
+      }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : 'Failed to create discount' }
+    }
+  }
+
   async function handleCreateSegment(product: ProductSummary, emails: string[]): Promise<{ ok: boolean; message: string }> {
     if (product.productId == null || emails.length === 0) {
       return { ok: false, message: 'No consented customers to create a segment for.' }
@@ -2377,6 +2537,91 @@ export default function ProductsInventory({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, fitNoteOverrides, preorderOverrides, tagOverrides])
 
+  // Exports exactly what the Stalled Inventory table + each row's "Estimate recovery" panel
+  // show — one row per product currently listed (post search/collection/sort filters), with
+  // whatever discount %/conversion %/excluded related-products are set (defaults if untouched),
+  // using the SAME audience math as StalledCampaignPanel's unionIds/K/buyers/potentialRevenue.
+  // Audience data (interested-customers) is lazily cached per-product only once a row has been
+  // expanded, so any stalled product not yet expanded gets fetched here before export too —
+  // otherwise its Potential Revenue would silently read as 0 instead of matching the dashboard.
+  async function exportDiscountPlanCSV() {
+    setExportingDiscountPlan(true)
+    try {
+      const pids = resolvedRows
+        .map((r) => r.product.productId)
+        .filter((id): id is number => id != null)
+      const missing = pids.filter((id) => !interestedCache[id])
+
+      const fetched = await Promise.all(missing.map(async (id) => {
+        try {
+          const res = await fetch(`/api/shopify/products/${id}/interested-customers`)
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error)
+          return [id, data as InterestedCustomersResponse] as const
+        } catch {
+          return [id, null] as const
+        }
+      }))
+      const newEntries = fetched.filter((e): e is [number, InterestedCustomersResponse] => e[1] != null)
+      const mergedCache: Record<number, InterestedCustomersResponse> = { ...interestedCache }
+      for (const [id, data] of newEntries) mergedCache[id] = data
+      if (newEntries.length > 0) {
+        setInterestedCache((prev) => ({ ...prev, ...mergedCache }))
+      }
+
+      const header = [
+        'Product', 'SKU', 'On Hand', 'Original Price', 'Discount %', 'Price at Discount',
+        'Margin at Discount', 'Cost Basis at Risk', 'Eligible Customers', 'Projected Buyers', 'Potential Revenue',
+      ]
+      const rows = resolvedRows.map((row) => {
+        const p = row.product
+        const pid = p.productId
+        const discount = pid != null ? discountByProduct[pid] ?? 0 : 0
+        const onHand = p.inventoryQuantity ?? 0
+        const discountedPrice = p.price != null ? p.price * (1 - discount) : null
+        const margin = marginAt(discountedPrice, row.cost)
+        const costBasisAtRisk = row.cost != null ? row.cost * onHand : null
+
+        const audience = pid != null ? mergedCache[pid] ?? null : null
+        const excluded = pid != null ? excludedChipsByProduct[pid] ?? EMPTY_EXCLUDED_CHIPS : EMPTY_EXCLUDED_CHIPS
+        const conversionPercent = pid != null ? conversionPercentByProduct[pid] ?? 100 : 100
+
+        const unionIds = new Set<number>()
+        for (const entry of audience?.byRelatedProduct ?? []) {
+          if (excluded.has(entry.relatedProductId)) continue
+          for (const id of entry.customerIds) unionIds.add(id)
+        }
+        const K = unionIds.size
+        const buyers = Math.min(K * (conversionPercent / 100), onHand)
+        const potentialRevenue = discountedPrice != null ? discountedPrice * buyers : 0
+
+        return [
+          p.title,
+          p.sku ?? '',
+          String(onHand),
+          p.price != null ? p.price.toFixed(2) : '',
+          `${Math.round(discount * 100)}%`,
+          discountedPrice != null ? discountedPrice.toFixed(2) : '',
+          margin != null ? margin.amount.toFixed(2) : '',
+          costBasisAtRisk != null ? costBasisAtRisk.toFixed(2) : '',
+          String(K),
+          buyers.toFixed(1),
+          potentialRevenue.toFixed(2),
+        ]
+      })
+      const csv = [header, ...rows].map((r) => r.map(csvEscape).join(',')).join('\r\n')
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `discount-plan-${new Date().toISOString().slice(0, 10)}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      setExportingDiscountPlan(false)
+    }
+  }
+
   return (
     <section className="max-w-full">
       {onBackToSalesOverview && (
@@ -2523,6 +2768,16 @@ export default function ProductsInventory({
               <option value="margin">Sort: Margin</option>
               <option value="daysStalled">Sort: Days Stalled</option>
             </select>
+            {activeFilter === 'stalled' && (
+              <button
+                onClick={exportDiscountPlanCSV}
+                disabled={exportingDiscountPlan}
+                className="flex items-center gap-2 text-sm font-medium text-charcoal-600 border border-sand-300 hover:border-terracotta-400 hover:text-terracotta-600 px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {exportingDiscountPlan ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                Export Discount Plan
+              </button>
+            )}
           </div>
 
           {/* ─── Product table ───────────────────────────────────────────── */}
@@ -2565,6 +2820,10 @@ export default function ProductsInventory({
                       const restockEarlyBusy = pid != null && !!tagToggleBusy[`${pid}:${RESTOCK_EARLY_TAG}`]
                       const lowStockError = pid != null ? tagToggleErrors[`${pid}:${LOW_STOCK_TAG}`] : undefined
                       const restockEarlyError = pid != null ? tagToggleErrors[`${pid}:${RESTOCK_EARLY_TAG}`] : undefined
+                      const discount = pid != null ? discountByProduct[pid] ?? 0 : 0
+                      const customDiscountInput = pid != null ? customDiscountInputByProduct[pid] ?? '' : ''
+                      const excludedChips = pid != null ? excludedChipsByProduct[pid] ?? EMPTY_EXCLUDED_CHIPS : EMPTY_EXCLUDED_CHIPS
+                      const conversionPercent = pid != null ? conversionPercentByProduct[pid] ?? 100 : 100
                       return (
                         <ProductRow
                           key={p.title}
@@ -2594,6 +2853,23 @@ export default function ProductsInventory({
                           recomputingRelated={recomputingRelated}
                           relatedComputedAt={relatedData?.computedAt ?? null}
                           onCreateSegment={handleCreateSegment}
+                          discount={discount}
+                          onDiscountChange={(v) => { if (pid != null) setDiscountByProduct((prev) => ({ ...prev, [pid]: v })) }}
+                          customDiscountInput={customDiscountInput}
+                          onCustomDiscountInputChange={(v) => { if (pid != null) setCustomDiscountInputByProduct((prev) => ({ ...prev, [pid]: v })) }}
+                          onCreateDiscount={handleCreateDiscount}
+                          excludedChips={excludedChips}
+                          onToggleChip={(chipId) => {
+                            if (pid == null) return
+                            setExcludedChipsByProduct((prev) => {
+                              const next = new Set(prev[pid] ?? EMPTY_EXCLUDED_CHIPS)
+                              if (next.has(chipId)) next.delete(chipId)
+                              else next.add(chipId)
+                              return { ...prev, [pid]: next }
+                            })
+                          }}
+                          conversionPercent={conversionPercent}
+                          onConversionPercentChange={(v) => { if (pid != null) setConversionPercentByProduct((prev) => ({ ...prev, [pid]: v })) }}
                           restockExpanded={restockExpanded}
                           onToggleRestockExpand={() => toggleRestockExpand(pid)}
                           restockData={restockData}

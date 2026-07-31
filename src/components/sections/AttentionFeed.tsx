@@ -5,7 +5,7 @@ import type { LucideIcon } from 'lucide-react'
 import { RefreshCw, AlertCircle, AlertTriangle, CheckCircle2, Truck, Clock, Mail, UserMinus, GitBranch, Inbox } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
-import { isSoldOutLive, getStalledUnitsSummary, getLowRunwaySummary } from '@/lib/product-metrics'
+import { isSoldOutLive, getStalledUnitsSummary, getLowRunwaySummary, getReturnRiskSummary } from '@/lib/product-metrics'
 import { computeRFM } from '@/lib/rfm'
 import { DEMO_DELIVERABILITY_TREND, type DemoDeliverabilityPoint } from '@/lib/email-performance-demo'
 import type { EnrichedCustomer, CSTicket, LateShipment, ProductSummary } from '@/types'
@@ -35,7 +35,7 @@ function fmt(n: number, currency: string) {
 
 interface AttentionFeedProps {
   onGoToLateShipments?: () => void
-  onGoToProductsFiltered?: (filter: 'soldout' | 'stalled' | 'lowrunway') => void
+  onGoToProductsFiltered?: (filter: 'soldout' | 'stalled' | 'lowrunway' | 'returnrisk') => void
   onGoToEmailDeliverability?: () => void
   onGoToCustomerIntelligenceRFM?: () => void
   onGoToCustomerJourney?: () => void
@@ -65,6 +65,7 @@ export default function AttentionFeed({
   // src/lib/product-metrics.ts — the exact same functions SalesOverview.tsx uses.
   const [products, setProducts] = useState<ProductSummary[]>([])
   const [productsUnavailable, setProductsUnavailable] = useState(false)
+  const [returnsAvailable, setReturnsAvailable] = useState(false)
 
   // Deliverability: reuses EmailDeliverability.tsx's own real/demo toggle and its exact
   // first-vs-last direction comparison. Flag mirrors the condition behind that tab's
@@ -103,6 +104,7 @@ export default function AttentionFeed({
         if (!ok) throw new Error(data.error)
         setProducts(data.products ?? [])
         setProductsUnavailable(!(data.inventoryAvailable ?? false))
+        setReturnsAvailable(data.returnsAvailable ?? false)
         setCurrency(data.currency ?? 'EUR')
       })
       .catch(() => setProductsUnavailable(true))
@@ -170,6 +172,7 @@ export default function AttentionFeed({
   const stalledSummary = useMemo(() => getStalledUnitsSummary(products), [products])
   const soldOutCount = useMemo(() => products.filter(isSoldOutLive).length, [products])
   const lowRunwaySummary = useMemo(() => getLowRunwaySummary(products), [products])
+  const returnRiskSummary = useMemo(() => getReturnRiskSummary(products), [products])
 
   const entries = useMemo(() => {
     const list: FeedEntry[] = []
@@ -213,6 +216,20 @@ export default function AttentionFeed({
         monetaryValue: lowRunwaySummary.revenueAtRisk,
         countValue: lowRunwaySummary.count,
         onClick: () => onGoToProductsFiltered?.('lowrunway'),
+      })
+    }
+
+    if (!productsUnavailable && returnsAvailable && returnRiskSummary.count > 0) {
+      list.push({
+        key: 'product-health',
+        icon: AlertTriangle,
+        tone: 'warning',
+        text: `${returnRiskSummary.count} product${returnRiskSummary.count !== 1 ? 's' : ''} with high return rates`,
+        detail: 'Product Health',
+        valueLabel: `${fmt(returnRiskSummary.returnedRevenue, currency)} returned`,
+        monetaryValue: returnRiskSummary.returnedRevenue,
+        countValue: returnRiskSummary.count,
+        onClick: () => onGoToProductsFiltered?.('returnrisk'),
       })
     }
 
@@ -295,7 +312,7 @@ export default function AttentionFeed({
     })
   }, [
     lateUnavailable, lateCount, lateValue, currency, onGoToLateShipments,
-    productsUnavailable, stalledSummary, soldOutCount, lowRunwaySummary, onGoToProductsFiltered,
+    productsUnavailable, stalledSummary, soldOutCount, lowRunwaySummary, returnsAvailable, returnRiskSummary, onGoToProductsFiltered,
     deliverabilityFlag, onGoToEmailDeliverability,
     atRiskCount, onGoToCustomerIntelligenceRFM,
     unmatchedTransitions, onGoToCustomerJourney,

@@ -64,6 +64,20 @@ export function getLowRunwaySummary(products: ProductSummary[]): LowRunwaySummar
   return { count: list.length, revenueAtRisk }
 }
 
+export interface ReturnRiskSummary {
+  count: number
+  returnedRevenue: number
+}
+
+// Revenue lost to qualifying returns (sizing/style/description/quality) across flagged
+// products — Σ(price × returnedUnits), same proxy pattern as getLowRunwaySummary's
+// revenueAtRisk, ranked for the Attention Feed.
+export function getReturnRiskSummary(products: ProductSummary[]): ReturnRiskSummary {
+  const list = products.filter((p) => p.returnFlagged)
+  const returnedRevenue = list.reduce((s, p) => s + (p.price ?? 0) * (p.returnedUnits ?? 0), 0)
+  return { count: list.length, returnedRevenue }
+}
+
 export interface BestSeller {
   title: string
   imageUrl: string | null
