@@ -117,6 +117,12 @@ function normalizeAutomationName(name: string): string {
   return name.trim().toLowerCase()
 }
 
+function fmtSyncDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-GB', {
+    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
+
 function ChannelBadge({ channel }: { channel: JourneyAutomation['channel'] }) {
   const Icon = channel === 'SMS' ? MessageSquare : Mail
   return (
@@ -362,6 +368,10 @@ export default function CustomerJourney({
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState<{ checked: number; changed: number; errors: { customerId: number; email: string; error: string }[] } | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
+  const [tagSyncing, setTagSyncing] = useState(false)
+  const [tagSyncResult, setTagSyncResult] = useState<{ checked: number; changed: number; errors: { customerId: number; email: string; error: string }[] } | null>(null)
+  const [tagSyncError, setTagSyncError] = useState<string | null>(null)
+  const [lastTagSyncAt, setLastTagSyncAt] = useState<string | null>(null)
   const [realAutomationIds, setRealAutomationIds] = useState<Map<string, string>>(new Map())
 
   async function syncStages() {
@@ -379,6 +389,35 @@ export default function CustomerJourney({
       setSyncing(false)
     }
   }
+
+  // Separate from syncStages() above — pushes the namespaced stage:*/rfm:*/rfm-at-lapse:*
+  // tags used for Omnisend automation branching (src/app/api/sync-tags/route.ts),
+  // additive to the un-namespaced lela-* tags syncStages() already pushes.
+  async function syncTags() {
+    setTagSyncing(true)
+    setTagSyncError(null)
+    setTagSyncResult(null)
+    try {
+      const res = await fetch('/api/sync-tags', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Sync failed')
+      setTagSyncResult(data)
+      if (data.lastSyncAt) setLastTagSyncAt(data.lastSyncAt)
+    } catch (e) {
+      setTagSyncError(e instanceof Error ? e.message : 'Sync failed')
+    } finally {
+      setTagSyncing(false)
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/sync-tags')
+      .then((res) => (res.ok ? res.json() : { lastSyncAt: null }))
+      .then((data: { lastSyncAt: string | null }) => { if (!cancelled) setLastTagSyncAt(data.lastSyncAt) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   function zoomIn() { setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100)) }
   function zoomOut() { setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100)) }
@@ -450,14 +489,30 @@ export default function CustomerJourney({
   return (
     <div>
       <div className="flex items-center justify-between gap-3 mb-3">
-        <button
-          onClick={syncStages}
-          disabled={syncing}
-          className="flex items-center gap-2 text-sm font-medium text-white bg-olive-500 hover:bg-olive-600 px-4 py-2 rounded-lg transition-colors disabled:opacity-60"
-        >
-          {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-          {syncing ? 'Syncing…' : 'Sync Stages to Omnisend'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={syncStages}
+            disabled={syncing}
+            className="flex items-center gap-2 text-sm font-medium text-white bg-olive-500 hover:bg-olive-600 px-4 py-2 rounded-lg transition-colors disabled:opacity-60"
+          >
+            {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {syncing ? 'Syncing…' : 'Sync Stages to Omnisend'}
+          </button>
+
+          <button
+            onClick={syncTags}
+            disabled={tagSyncing}
+            title="Pushes namespaced stage:*/rfm:*/rfm-at-lapse:* tags, for Omnisend automation branching"
+            className="flex items-center gap-2 text-sm font-medium text-terracotta-700 bg-terracotta-100 hover:bg-terracotta-200 px-4 py-2 rounded-lg transition-colors disabled:opacity-60"
+          >
+            {tagSyncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {tagSyncing ? 'Syncing…' : 'Sync Tags (RFM/Source)'}
+          </button>
+
+          <span className="text-xs text-charcoal-400">
+            {lastTagSyncAt ? `Last synced ${fmtSyncDate(lastTagSyncAt)}` : 'Never synced'}
+          </span>
+        </div>
 
         <div className="flex items-center gap-1">
           <button
@@ -502,6 +557,29 @@ export default function CustomerJourney({
           {syncResult.errors.length > 0 && (
             <ul className="mt-2 space-y-1 text-xs text-red-600">
               {syncResult.errors.map((e) => (
+                <li key={e.customerId}>{e.email || `Customer ${e.customerId}`}: {e.error}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {tagSyncError && (
+        <div className="flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-3">
+          <AlertCircle size={14} className="flex-shrink-0" /> {tagSyncError}
+        </div>
+      )}
+
+      {tagSyncResult && (
+        <div className="text-sm bg-white rounded-xl shadow-card px-4 py-3 mb-3">
+          <p className="text-charcoal-700">
+            Checked <strong>{tagSyncResult.checked}</strong> customers · <strong>{tagSyncResult.changed}</strong> tag
+            change{tagSyncResult.changed === 1 ? '' : 's'} synced to Shopify + Omnisend
+            {tagSyncResult.errors.length > 0 && <> · <strong className="text-red-600">{tagSyncResult.errors.length}</strong> error{tagSyncResult.errors.length === 1 ? '' : 's'}</>}
+          </p>
+          {tagSyncResult.errors.length > 0 && (
+            <ul className="mt-2 space-y-1 text-xs text-red-600">
+              {tagSyncResult.errors.map((e) => (
                 <li key={e.customerId}>{e.email || `Customer ${e.customerId}`}: {e.error}</li>
               ))}
             </ul>

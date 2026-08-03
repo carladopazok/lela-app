@@ -50,15 +50,19 @@ export const PENDING_WORK: PendingWorkItem[] = [
     area: 'Deployment & Storefront',
     status: 'blocked',
     blockedBy: 'deploy-app',
-    summary: 'The foundation now exists and works manually: POST /api/sync-stages diffs every customer\'s freshly computed stage (getCustomerStages() in src/lib/segmentation.ts) against data/customer-stage.json, swaps the Omnisend tag on anything changed, and logs the transition to data/customer-stage-history.json — triggered by a button on the Journey tab. What\'s still missing is making it automatic: no Shopify webhooks, no scheduled job, neither possible without a public URL.',
+    summary: 'The foundation now exists and works manually via two buttons on the Journey tab: POST /api/sync-stages diffs every customer\'s freshly computed stage (getCustomerStages() in src/lib/segmentation.ts) against data/customer-stage.json and swaps the un-namespaced lela-* tag on anything changed (logged to data/customer-stage-history.json); POST /api/sync-tags does the same diff but writes the namespaced stage:*/rfm:*/rfm-at-lapse:* tags (data/customer-tag-sync.json) that Omnisend automations branch on. What\'s still missing for both is making them automatic: no Shopify webhooks, no scheduled job, neither possible without a public URL.',
     instructions: [
       'Deploy the app first (see above).',
       'Confirm inside Omnisend whether automations trigger off segment-membership changes automatically, or need a direct Events API call per transition — this decides the integration pattern.',
       'Resolve "Map Journey board flows to real Omnisend automations" below first — there’s currently no link between a Lela stage and a real Omnisend automation ID to trigger.',
-      'Register Shopify webhooks (orders/create, refunds/create, checkouts/create — the last one needs a delayed check, since "abandoned" only becomes true after a few hours of inactivity) that call /api/sync-stages (or a per-customer variant of it) instead of waiting for someone to click the button.',
-      'Add a scheduled job (e.g. Vercel Cron) hitting the same route on an interval, for threshold-only transitions no webhook covers (e.g. New → Winback purely from elapsed time).',
+      'Register Shopify webhooks (orders/create, orders/updated, customers/create, refunds/create, checkouts/create — the last one needs a delayed check, since "abandoned" only becomes true after a few hours of inactivity) that call /api/sync-stages and /api/sync-tags (or per-customer variants of them) instead of waiting for someone to click a button.',
+      'Add a scheduled job (e.g. Vercel Cron) hitting both routes on an interval, for threshold-only transitions no webhook covers (e.g. New → Winback purely from elapsed time, or the rfm-at-lapse freeze/clear that piggybacks on the same stage diff).',
     ],
-    relatedFiles: ['src/app/api/sync-stages/route.ts', 'src/lib/segmentation.ts', 'src/lib/stage-storage.ts', 'src/components/sections/CustomerJourney.tsx'],
+    relatedFiles: [
+      'src/app/api/sync-stages/route.ts', 'src/lib/segmentation.ts', 'src/lib/stage-storage.ts',
+      'src/app/api/sync-tags/route.ts', 'src/lib/tag-sync.ts', 'src/lib/tag-sync-storage.ts',
+      'src/components/sections/CustomerJourney.tsx',
+    ],
   },
   {
     id: 'build-omnisend-automations',

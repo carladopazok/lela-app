@@ -119,6 +119,16 @@ export const STAGE_TO_SEGMENT: Record<LifecycleStage, RFMSegment> = {
   Lost: 'Lost',
 }
 
+// Wraps STAGE_TO_SEGMENT for the tag sync engine (src/lib/tag-sync.ts) — same
+// reasoning as computeRFM below: stage IS the segment classifier, so this isn't a
+// second scoring model, just a named entry point callable with just a stage. Returns
+// null for 'Never Purchased' — RFM has no recency/frequency/monetary to score for a
+// customer with zero orders, so no rfm:* tag should be written for them.
+export function computeRfmTier(stage: LifecycleStage): RFMSegment | null {
+  if (stage === 'Never Purchased') return null
+  return STAGE_TO_SEGMENT[stage]
+}
+
 export function computeRFM(customers: EnrichedCustomer[]): ScoredCustomer[] {
   const MS = 86_400_000
   const now = Date.now()
