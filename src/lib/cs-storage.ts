@@ -1,12 +1,13 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import path from 'path'
-import type { CSTicket, CSMacro } from '@/types'
+import type { CSTicket, CSMacro, AgentGuidance } from '@/types'
 
 const DATA_DIR = path.join(process.cwd(), 'data')
 const TICKETS_FILE = path.join(DATA_DIR, 'tickets.json')
 const MACROS_FILE = path.join(DATA_DIR, 'macros.json')
 const CUSTOM_TAGS_FILE = path.join(DATA_DIR, 'custom-tags.json')
 const HIDDEN_TAGS_FILE = path.join(DATA_DIR, 'hidden-tags.json')
+const AGENT_GUIDANCE_FILE = path.join(DATA_DIR, 'agent-guidance.json')
 
 function ensureDataDir() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
@@ -66,4 +67,18 @@ export function readHiddenTags(): string[] {
 export function writeHiddenTags(tags: string[]) {
   ensureDataDir()
   writeFileSync(HIDDEN_TAGS_FILE, JSON.stringify(tags, null, 2))
+}
+
+export function readAgentGuidance(): AgentGuidance {
+  try {
+    if (!existsSync(AGENT_GUIDANCE_FILE)) return { agentName: '', toneOfVoice: '', standardMessage: '', notes: [] }
+    return JSON.parse(readFileSync(AGENT_GUIDANCE_FILE, 'utf-8')) as AgentGuidance
+  } catch {
+    return { agentName: '', toneOfVoice: '', standardMessage: '', notes: [] }
+  }
+}
+
+export function writeAgentGuidance(guidance: AgentGuidance) {
+  ensureDataDir()
+  writeFileSync(AGENT_GUIDANCE_FILE, JSON.stringify(guidance, null, 2))
 }

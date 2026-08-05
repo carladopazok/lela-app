@@ -14,7 +14,7 @@ If the site stops responding: `pkill -f "next dev"` then `npm run dev` again.
 
 - Next.js 14 App Router, TypeScript, Tailwind CSS 3
 - Shopify Admin REST API v2024-10
-- Omnisend (email marketing), Microsoft Graph (Outlook CS inbox)
+- Omnisend (email marketing), Microsoft Graph (Outlook CS inbox), Ollama cloud API (CS "Draft with AI")
 - No database — JSON files in `data/` for local persistence
 
 ## Auth
@@ -38,6 +38,11 @@ Each dashboard section = one client component in `src/components/sections/` + on
 ### API routes
 All routes: import `getSession` from `@/lib/session`, `createShopifyClient` from `@/lib/shopify`. Return `NextResponse.json(...)`. Use `shopify.getAll()` for paginated Shopify endpoints.
 
+### AI Drafting (Customer Service)
+"Draft with AI" button on open tickets (`TicketDetail` in `src/components/sections/CustomerService.tsx`) calls `POST /api/cs/tickets/[id]/ai-draft`, which calls `draftTicketReply()` in `src/lib/ollama.ts`. Manual trigger only — never runs automatically, never auto-sends; the result just pre-fills the existing reply textarea and a dismissible suggested-tag badge, both requiring an explicit user action (Send / Apply) same as inserting a macro does today. Uses Ollama's cloud API, model `gemma4:cloud`, native `/api/chat` shape (not OpenAI-compatible) at `https://ollama.com/api/chat`, authenticated via `Authorization: Bearer $OLLAMA_API_KEY`. Requires `OLLAMA_API_KEY` in `.env.local` (see `.env.local.example`). Uses `format: "json"` (plain JSON mode) plus explicit prompt instructions to get a structured `{ tag, draft }` response — the schema-object variant of `format` documented by Ollama is silently ignored by `gemma4:cloud` (verified directly against their own docs example, which returned free-form prose). Even in JSON mode the model occasionally wraps output in a ` ```json ` fence despite being told not to, so `stripCodeFence()` in `ollama.ts` strips that before parsing. Customer context (order count/AOV/tags) is passed from the client's already-loaded `customers` list (no new Shopify fetch); macro matching is left to the model itself (all macros are included in the prompt) rather than a custom similarity algorithm. On failure the real upstream error is surfaced in the UI — no mock/fallback draft.
+
+Standing preferences live in the "Agent" tab of Customer Service (`AgentGuidancePanel` in `CustomerService.tsx`) — agent name, tone of voice, a standard closing message, and a list of titled guidance notes (e.g. "Refunds over €100"), stored as one JSON object via `GET`/`PUT /api/cs/agent-guidance` (`readAgentGuidance()`/`writeAgentGuidance()` in `cs-storage.ts`). Tone of voice and the notes are read server-side into every `ai-draft` call and injected into the prompt as "standing instructions", separate from the one-off per-draft `guidance` (regenerate box), which is layered on top for that draft only. Agent name and the standard message are *not* left to the model — `appendSignature()` in `ollama.ts` appends them deterministically after the model responds (`draft + "\n\n— {agentName}\n\n{standardMessage}"`), since a signature that must appear on every reply can't depend on whether the model remembers to include it; the prompt separately tells the model not to invent its own sign-off, so there's no duplicate. Saving guidance doesn't trigger anything — it only changes what future "Draft with AI" clicks send.
+
 ### Data storage (JSON files — no DB)
 | File | Owned by | Contents |
 |---|---|---|
@@ -48,6 +53,7 @@ All routes: import `getSession` from `@/lib/session`, `createShopifyClient` from
 | `data/product-preorders.json` | `src/lib/product-preorders-storage.ts` | `{ productId: { text, status: 'draft'\|'published', updatedAt } }` — draft state + mirror of the published `custom.preorder` metafield |
 | `data/tickets.json` | `src/lib/cs-storage.ts` | CS ticket array |
 | `data/macros.json` | `src/lib/cs-storage.ts` | CS macro array |
+| `data/agent-guidance.json` | `src/lib/cs-storage.ts` | `{ agentName, toneOfVoice, standardMessage, notes: [{ id, title, body, createdAt, updatedAt? }] }` — standing instructions for "Draft with AI" |
 | `data/ms-tokens.json` | `src/lib/ms-graph.ts` | Microsoft OAuth tokens |
 
 ## Design System
@@ -71,7 +77,7 @@ Section header: `text-xs font-semibold uppercase tracking-widest text-charcoal-4
 - `EnrichedCustomer` — `ShopifyCustomer` + `{ aov, lastOrderDate, computedTags, manualTags, productTags }`
 - `ScoredCustomer` — `EnrichedCustomer` + `{ rfm: { r, f, m }, segment }` (from `src/lib/rfm.ts`)
 - `CUSTOMER_TAGS` — `['VIP', 'loyal', 'active', '1-order', 'winback', 'at-risk', 'lapsed', 'lost', 'never-purchased', 'abandoned-checkout']`, computed by the shared classifier in `src/lib/segmentation.ts` (see its changelog comment for thresholds)
-- `CSTicket`, `CSMacro`, `CSMessage` — customer service entities
+- `CSTicket`, `CSMacro`, `CSMessage`, `AgentGuidance`, `AgentGuidanceNote` — customer service entities
 - `ShopifyOrder` includes `line_items: ShopifyLineItem[]`; `product_type` on line items is often empty — use `data/product-categories.json` as fallback
 
 ## Reusable UI

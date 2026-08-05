@@ -4,14 +4,14 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   RefreshCw, AlertCircle, Mail, ArrowLeft, Send, Plus, Trash2,
   Edit2, Check, X, Loader2, Inbox, BookOpen, ChevronDown, ChevronLeft, ChevronRight, Tag, User,
-  ShieldAlert, Ban, ArrowUp, ArrowDown, ArrowUpDown,
+  ShieldAlert, Ban, ArrowUp, ArrowDown, ArrowUpDown, Sparkles, RotateCcw, Settings2, BookmarkPlus,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import TagBadge from '@/components/ui/TagBadge'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import { isLikelySpamSender } from '@/lib/spam-detection'
-import type { CSTicket, CSMacro, TicketStatus, TicketTag, EnrichedCustomer } from '@/types'
+import type { CSTicket, CSMacro, TicketStatus, TicketTag, EnrichedCustomer, AgentGuidanceNote } from '@/types'
 import { TICKET_TAGS } from '@/types'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -86,6 +86,7 @@ function TicketDetail({
   onToggleEmail,
   initialReplyBody,
   customerTag,
+  customers,
 }: {
   ticket: CSTicket
   macros: CSMacro[]
@@ -104,6 +105,7 @@ function TicketDetail({
   onToggleEmail: () => void
   initialReplyBody?: string
   customerTag?: string
+  customers: EnrichedCustomer[]
 }) {
   const [ticket, setTicket] = useState(initial)
   const [replyBody, setReplyBody] = useState(initialReplyBody ?? '')
@@ -115,6 +117,13 @@ function TicketDetail({
   const [addingTag, setAddingTag] = useState(false)
   const [newTagValue, setNewTagValue] = useState('')
   const [savingTag, setSavingTag] = useState(false)
+  const [aiDrafting, setAiDrafting] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [aiSuggestedTag, setAiSuggestedTag] = useState<string | null>(null)
+  const [aiHasDrafted, setAiHasDrafted] = useState(false)
+  const [aiGuidance, setAiGuidance] = useState('')
+  const [savingGuidanceNote, setSavingGuidanceNote] = useState(false)
+  const [savedGuidanceNote, setSavedGuidanceNote] = useState(false)
 
   async function sendReply(moveToStatus?: TicketStatus) {
     if (!replyBody.trim()) return
@@ -194,6 +203,77 @@ function TicketDetail({
     setNewTagValue('')
     setAddingTag(false)
     setSavingTag(false)
+  }
+
+  async function draftWithAI(guidance?: string) {
+    setAiDrafting(true)
+    setAiError(null)
+    try {
+      const customer = customers.find((c) => c.email?.toLowerCase() === ticket.from.toLowerCase())
+      const res = await fetch(`/api/cs/tickets/${ticket.id}/ai-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer: customer
+            ? {
+                email: customer.email,
+                orders_count: customer.orders_count,
+                aov: customer.aov,
+                lastOrderDate: customer.lastOrderDate,
+                computedTags: customer.computedTags,
+                manualTags: customer.manualTags,
+              }
+            : null,
+          guidance,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setReplyBody(data.draft)
+      setAiSuggestedTag(data.tag ?? null)
+      setAiHasDrafted(true)
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'AI draft failed')
+    } finally {
+      setAiDrafting(false)
+    }
+  }
+
+  // Promotes this ticket's one-off guidance into a standing note on the Agent tab. The
+  // guidance API has no partial-update endpoint (it's a small settings blob), so this
+  // reads the current object and PUTs it back with the new note appended.
+  async function saveGuidanceAsNote() {
+    const text = aiGuidance.trim()
+    if (!text) return
+    const defaultTitle = text.length > 60 ? `${text.slice(0, 60)}…` : text
+    const title = window.prompt('Title for this guidance note (shown on the Agent tab):', defaultTitle)
+    if (!title?.trim()) return
+
+    setSavingGuidanceNote(true)
+    setAiError(null)
+    setSavedGuidanceNote(false)
+    try {
+      const current = await fetch('/api/cs/agent-guidance').then((r) => r.json())
+      const note = { id: crypto.randomUUID(), title: title.trim(), body: text, createdAt: new Date().toISOString() }
+      const res = await fetch('/api/cs/agent-guidance', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentName: current.agentName ?? '',
+          toneOfVoice: current.toneOfVoice ?? '',
+          standardMessage: current.standardMessage ?? '',
+          notes: [...(current.notes ?? []), note],
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setSavedGuidanceNote(true)
+      setTimeout(() => setSavedGuidanceNote(false), 2000)
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Failed to save guidance')
+    } finally {
+      setSavingGuidanceNote(false)
+    }
   }
 
   return (
@@ -360,6 +440,11 @@ function TicketDetail({
           <AlertCircle size={14} /> {error}
         </div>
       )}
+      {aiError && (
+        <div className="flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-3">
+          <AlertCircle size={14} /> AI draft failed: {aiError}
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl shadow-card p-5">
         <div className="flex items-center justify-between mb-3">
@@ -377,30 +462,61 @@ function TicketDetail({
               Internal note
             </button>
           </div>
-          {macros.length > 0 && (
-            <div className="relative">
+          <div className="flex items-center gap-3">
+            {ticket.status === 'open' && (
               <button
-                onClick={() => setShowMacros((v) => !v)}
-                className="flex items-center gap-1 text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors"
+                onClick={() => draftWithAI()}
+                disabled={aiDrafting}
+                className="flex items-center gap-1 text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors disabled:opacity-50"
               >
-                <BookOpen size={12} /> Insert macro <ChevronDown size={12} />
+                {aiDrafting ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                {aiDrafting ? 'Drafting…' : 'Draft with AI'}
               </button>
-              {showMacros && (
-                <div className="absolute right-0 top-6 z-10 bg-white border border-sand-200 rounded-xl shadow-lg w-64 py-1 max-h-60 overflow-y-auto">
-                  {macros.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => { setReplyBody(m.body); setShowMacros(false) }}
-                      className="w-full text-left px-4 py-2.5 text-sm text-charcoal-600 hover:bg-sand-50 hover:text-charcoal-800 transition-colors"
-                    >
-                      {m.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+            )}
+            {macros.length > 0 && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowMacros((v) => !v)}
+                  className="flex items-center gap-1 text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors"
+                >
+                  <BookOpen size={12} /> Insert macro <ChevronDown size={12} />
+                </button>
+                {showMacros && (
+                  <div className="absolute right-0 top-6 z-10 bg-white border border-sand-200 rounded-xl shadow-lg w-64 py-1 max-h-60 overflow-y-auto">
+                    {macros.map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => { setReplyBody(m.body); setShowMacros(false) }}
+                        className="w-full text-left px-4 py-2.5 text-sm text-charcoal-600 hover:bg-sand-50 hover:text-charcoal-800 transition-colors"
+                      >
+                        {m.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
+        {aiSuggestedTag && (
+          <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-terracotta-50 border border-terracotta-200 rounded-lg">
+            <Sparkles size={12} className="text-terracotta-500 shrink-0" />
+            <span className="text-xs text-charcoal-600">
+              Suggested tag: <span className="font-medium capitalize">{aiSuggestedTag}</span>
+            </span>
+            {!ticket.tags.includes(aiSuggestedTag) && (
+              <button
+                onClick={() => { toggleTag(aiSuggestedTag); setAiSuggestedTag(null) }}
+                className="ml-auto text-xs font-medium text-terracotta-600 hover:text-terracotta-800"
+              >
+                Apply
+              </button>
+            )}
+            <button onClick={() => setAiSuggestedTag(null)} className="text-charcoal-400 hover:text-charcoal-600">
+              <X size={12} />
+            </button>
+          </div>
+        )}
         <textarea
           rows={5}
           value={replyBody}
@@ -408,6 +524,34 @@ function TicketDetail({
           placeholder={mode === 'note' ? 'Add an internal note (not sent to customer)…' : `Reply to ${ticket.fromName}…`}
           className={`w-full text-sm resize-none focus:outline-none placeholder:text-charcoal-300 leading-relaxed ${mode === 'note' ? 'text-amber-900' : 'text-charcoal-700'}`}
         />
+        {aiHasDrafted && (
+          <div className="flex items-center gap-2 mt-3">
+            <input
+              type="text"
+              value={aiGuidance}
+              onChange={(e) => setAiGuidance(e.target.value)}
+              placeholder="Not quite right? Add guidance and regenerate — e.g. offer store credit instead of a refund"
+              className="flex-1 text-xs px-3 py-1.5 border border-sand-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-terracotta-300 placeholder:text-charcoal-300"
+            />
+            <button
+              onClick={() => draftWithAI(aiGuidance)}
+              disabled={aiDrafting}
+              className="flex items-center gap-1 shrink-0 text-xs font-medium text-charcoal-500 hover:text-terracotta-600 px-2 py-1.5 disabled:opacity-50"
+            >
+              {aiDrafting ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+              Regenerate
+            </button>
+            <button
+              onClick={saveGuidanceAsNote}
+              disabled={savingGuidanceNote || !aiGuidance.trim()}
+              title="Save this guidance as a standing note for future tickets (Agent tab)"
+              className="flex items-center gap-1 shrink-0 text-xs font-medium text-charcoal-500 hover:text-terracotta-600 px-2 py-1.5 disabled:opacity-50"
+            >
+              {savingGuidanceNote ? <Loader2 size={12} className="animate-spin" /> : <BookmarkPlus size={12} />}
+              {savedGuidanceNote ? 'Saved' : 'Save as general guidance'}
+            </button>
+          </div>
+        )}
         <div className="flex items-center justify-between mt-3 pt-3 border-t border-sand-100 gap-3">
           {mode === 'reply' ? (
             <>
@@ -604,6 +748,274 @@ function MacroManager() {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Agent Guidance ────────────────────────────────────────────────────────────
+
+function AgentGuidancePanel() {
+  const [agentName, setAgentName] = useState('')
+  const [toneOfVoice, setToneOfVoice] = useState('')
+  const [standardMessage, setStandardMessage] = useState('')
+  const [notes, setNotes] = useState<AgentGuidanceNote[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [savingAgentName, setSavingAgentName] = useState(false)
+  const [savedAgentName, setSavedAgentName] = useState(false)
+  const [savingStandardMessage, setSavingStandardMessage] = useState(false)
+  const [savedStandardMessage, setSavedStandardMessage] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [newTitle, setNewTitle] = useState('')
+  const [newBody, setNewBody] = useState('')
+  const [editId, setEditId] = useState<string | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editBody, setEditBody] = useState('')
+
+  useEffect(() => {
+    fetch('/api/cs/agent-guidance').then((r) => r.json()).then((d) => {
+      setAgentName(d.agentName ?? '')
+      setToneOfVoice(d.toneOfVoice ?? '')
+      setStandardMessage(d.standardMessage ?? '')
+      setNotes(d.notes ?? [])
+      setLoading(false)
+    })
+  }, [])
+
+  function addNote() {
+    if (!newTitle.trim() || !newBody.trim()) return
+    setNotes((prev) => [...prev, { id: crypto.randomUUID(), title: newTitle.trim(), body: newBody.trim(), createdAt: new Date().toISOString() }])
+    setNewTitle('')
+    setNewBody('')
+  }
+
+  function saveEditedNote(id: string) {
+    setNotes((prev) => prev.map((n) => n.id === id ? { ...n, title: editTitle.trim(), body: editBody.trim(), updatedAt: new Date().toISOString() } : n))
+    setEditId(null)
+  }
+
+  function deleteNote(id: string) {
+    setNotes((prev) => prev.filter((n) => n.id !== id))
+  }
+
+  // The API always saves the whole guidance object (no partial-update support — it's a
+  // small settings blob, not worth a PATCH endpoint) — per-field "Save" buttons below send
+  // the current full state too, they just track their own saving/saved indicator.
+  async function persistGuidance(): Promise<void> {
+    const res = await fetch('/api/cs/agent-guidance', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentName, toneOfVoice, standardMessage, notes }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error)
+  }
+
+  async function saveAll() {
+    setSaving(true)
+    setError(null)
+    setSaved(false)
+    try {
+      await persistGuidance()
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveAgentName() {
+    setSavingAgentName(true)
+    setError(null)
+    setSavedAgentName(false)
+    try {
+      await persistGuidance()
+      setSavedAgentName(true)
+      setTimeout(() => setSavedAgentName(false), 2000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSavingAgentName(false)
+    }
+  }
+
+  async function saveStandardMessage() {
+    setSavingStandardMessage(true)
+    setError(null)
+    setSavedStandardMessage(false)
+    try {
+      await persistGuidance()
+      setSavedStandardMessage(true)
+      setTimeout(() => setSavedStandardMessage(false), 2000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSavingStandardMessage(false)
+    }
+  }
+
+  if (loading) return <LoadingSpinner label="Loading agent guidance…" />
+
+  return (
+    <div>
+      <p className="text-sm text-charcoal-400 mb-4">
+        Standing instructions used by &ldquo;Draft with AI&rdquo; on every future ticket — name, tone of voice, a standard closing message, and how to handle specific recurring situations. Saving here doesn&rsquo;t send or draft anything; it only changes what future drafts start from.
+      </p>
+
+      {error && (
+        <div className="flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-4">
+          <AlertCircle size={14} /> {error}
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl shadow-card p-6 mb-6">
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-4">Agent name</h3>
+        <input
+          type="text"
+          placeholder="e.g. Carla"
+          value={agentName}
+          onChange={(e) => setAgentName(e.target.value)}
+          className="w-full text-sm border border-sand-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-terracotta-200 focus:border-terracotta-400 transition-all placeholder:text-charcoal-300"
+        />
+        <div className="flex items-center justify-between mt-3">
+          <p className="text-xs text-charcoal-400">Signs off every AI-drafted reply automatically (e.g. &ldquo;— {agentName || 'Carla'}&rdquo;). Leave blank for no signature.</p>
+          <button
+            onClick={saveAgentName}
+            disabled={savingAgentName}
+            className="flex items-center gap-1.5 shrink-0 ml-3 px-3 py-1.5 bg-terracotta-500 hover:bg-terracotta-600 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+          >
+            {savingAgentName ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+            {savedAgentName ? 'Saved' : 'Save'}
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-card p-6 mb-6">
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-4">Tone of voice</h3>
+        <input
+          type="text"
+          placeholder="e.g. Warm, concise, apologize first when something went wrong"
+          value={toneOfVoice}
+          onChange={(e) => setToneOfVoice(e.target.value)}
+          className="w-full text-sm border border-sand-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-terracotta-200 focus:border-terracotta-400 transition-all placeholder:text-charcoal-300"
+        />
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-card p-6 mb-6">
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-4">Standard message</h3>
+        <textarea
+          rows={3}
+          placeholder="e.g. Thanks for shopping with us — free returns within 30 days."
+          value={standardMessage}
+          onChange={(e) => setStandardMessage(e.target.value)}
+          className="w-full text-sm border border-sand-300 rounded-xl px-4 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-terracotta-200 focus:border-terracotta-400 transition-all placeholder:text-charcoal-300"
+        />
+        <div className="flex items-center justify-between mt-3">
+          <p className="text-xs text-charcoal-400">Appended exactly as written to the end of every AI-drafted reply, after the signature. Leave blank to skip.</p>
+          <button
+            onClick={saveStandardMessage}
+            disabled={savingStandardMessage}
+            className="flex items-center gap-1.5 shrink-0 ml-3 px-3 py-1.5 bg-terracotta-500 hover:bg-terracotta-600 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+          >
+            {savingStandardMessage ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+            {savedStandardMessage ? 'Saved' : 'Save'}
+          </button>
+        </div>
+      </div>
+
+      {/* New note form */}
+      <div className="bg-white rounded-2xl shadow-card p-6 mb-6">
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-4">New Guidance Note</h3>
+        <input
+          type="text"
+          placeholder="Title (e.g. Refunds over €100)"
+          value={newTitle}
+          onChange={(e) => setNewTitle(e.target.value)}
+          className="w-full text-sm border border-sand-300 rounded-xl px-4 py-2.5 mb-3 focus:outline-none focus:ring-2 focus:ring-terracotta-200 focus:border-terracotta-400 transition-all placeholder:text-charcoal-300"
+        />
+        <textarea
+          rows={4}
+          placeholder="How should the agent handle this situation?"
+          value={newBody}
+          onChange={(e) => setNewBody(e.target.value)}
+          className="w-full text-sm border border-sand-300 rounded-xl px-4 py-2.5 mb-3 resize-none focus:outline-none focus:ring-2 focus:ring-terracotta-200 focus:border-terracotta-400 transition-all placeholder:text-charcoal-300"
+        />
+        <button
+          onClick={addNote}
+          disabled={!newTitle.trim() || !newBody.trim()}
+          className="flex items-center gap-2 px-4 py-2 bg-terracotta-500 hover:bg-terracotta-600 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
+        >
+          <Plus size={14} /> Add note
+        </button>
+      </div>
+
+      {/* Notes list */}
+      {notes.length === 0 ? (
+        <p className="text-sm text-charcoal-400 text-center py-10">No guidance notes yet — add one above.</p>
+      ) : (
+        <div className="space-y-3 mb-6">
+          {notes.map((n) => (
+            <div key={n.id} className="bg-white rounded-2xl shadow-card p-5">
+              {editId === n.id ? (
+                <>
+                  <input
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    className="w-full text-sm font-medium border border-sand-300 rounded-xl px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-terracotta-200"
+                  />
+                  <textarea
+                    rows={4}
+                    value={editBody}
+                    onChange={(e) => setEditBody(e.target.value)}
+                    className="w-full text-sm border border-sand-300 rounded-xl px-3 py-2 mb-3 resize-none focus:outline-none focus:ring-2 focus:ring-terracotta-200"
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={() => saveEditedNote(n.id)} className="flex items-center gap-1 text-xs px-3 py-1.5 bg-olive-600 text-white rounded-lg hover:bg-olive-700 transition-colors">
+                      <Check size={12} /> Save
+                    </button>
+                    <button onClick={() => setEditId(null)} className="flex items-center gap-1 text-xs px-3 py-1.5 border border-sand-300 text-charcoal-500 rounded-lg hover:bg-sand-100 transition-colors">
+                      <X size={12} /> Cancel
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-start justify-between mb-2">
+                    <p className="font-medium text-charcoal-700 text-sm">{n.title}</p>
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => { setEditId(n.id); setEditTitle(n.title); setEditBody(n.body) }}
+                        className="p-1.5 text-charcoal-400 hover:text-charcoal-700 hover:bg-sand-100 rounded-lg transition-colors"
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                      <button
+                        onClick={() => deleteNote(n.id)}
+                        className="p-1.5 text-charcoal-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-sm text-charcoal-500 whitespace-pre-wrap leading-relaxed">{n.body}</p>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button
+        onClick={saveAll}
+        disabled={saving}
+        className="flex items-center gap-2 px-4 py-2 bg-terracotta-500 hover:bg-terracotta-600 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
+      >
+        {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+        {saved ? 'Saved' : 'Save changes'}
+      </button>
     </div>
   )
 }
@@ -834,7 +1246,7 @@ export default function CustomerService({
   onNavigateToCustomer?: (email: string) => void
   onBackToSalesOverview?: () => void
 } = {}) {
-  const [tab, setTab] = useState<'tickets' | 'macros' | 'tags'>('tickets')
+  const [tab, setTab] = useState<'tickets' | 'macros' | 'tags' | 'agent'>('tickets')
   const [tickets, setTickets] = useState<CSTicket[]>([])
   const [macros, setMacros] = useState<CSMacro[]>([])
   const [customTags, setCustomTags] = useState<string[]>([])
@@ -1077,10 +1489,19 @@ export default function CustomerService({
           >
             <BookOpen size={13} /> Macros
           </button>
+          <button
+            onClick={() => { setTab('agent'); setSelectedTicket(null) }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
+              ${tab === 'agent' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
+          >
+            <Settings2 size={13} /> Agent
+          </button>
         </div>
       </div>
 
       {tab === 'macros' && <MacroManager />}
+
+      {tab === 'agent' && <AgentGuidancePanel />}
 
       {tab === 'tags' && (
         <TagsOverview
@@ -1335,6 +1756,7 @@ export default function CustomerService({
                 emailHidden={hiddenEmails.has(selectedTicket.from.toLowerCase())}
                 onToggleEmail={() => toggleEmailVisibility(selectedTicket.from)}
                 customerTag={customerTagByEmail.get(selectedTicket.from.toLowerCase())}
+                customers={customers}
                 onUpdated={(updated) => {
                   setTickets((prev) => prev.map((t) => t.id === updated.id ? updated : t))
                   setSelectedTicket(updated)

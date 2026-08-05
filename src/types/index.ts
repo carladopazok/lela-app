@@ -204,6 +204,21 @@ export interface CSMacro {
   updatedAt?: string
 }
 
+export interface AgentGuidanceNote {
+  id: string
+  title: string
+  body: string
+  createdAt: string
+  updatedAt?: string
+}
+
+export interface AgentGuidance {
+  agentName: string
+  toneOfVoice: string
+  standardMessage: string
+  notes: AgentGuidanceNote[]
+}
+
 // ─── Forecasting ────────────────────────────────────────────────────────────
 
 export interface DailyRevenue {
