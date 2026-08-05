@@ -138,3 +138,52 @@ export async function draftTicketReply(input: DraftTicketReplyInput): Promise<Dr
   const result = parsed as DraftTicketReplyResult
   return { tag: result.tag, draft: appendSignature(result.draft, input.agentGuidance) }
 }
+
+export interface AskAssistantInput {
+  question: string
+  context: string
+  history: { role: 'user' | 'assistant'; content: string }[]
+}
+
+const ASSISTANT_SYSTEM_PROMPT = `You are "Helper", an assistant embedded in a Shopify ecommerce operations dashboard called Lela. Answer the user's question using ONLY the data digest provided below — it's a live snapshot of the store's customers, products, and CS tickets. If the digest doesn't contain enough information to answer confidently, say so plainly rather than guessing or making up numbers. When a digest line labels several distinct numbers (e.g. product count vs. units vs. revenue), quote the specific one the question asks for exactly as given — never merge, average, or substitute one for another, and never recompute a number the digest already states. Keep answers concise and direct — a sentence or two, or a short list, not an essay. Don't repeat the question back.`
+
+// Free-form conversational Q&A — unlike draftTicketReply, there's no structured object to
+// parse, so this skips format:'json'/stripCodeFence entirely and just returns the model's
+// text response.
+export async function askAssistant({ question, context, history }: AskAssistantInput): Promise<string> {
+  const apiKey = process.env.OLLAMA_API_KEY
+  if (!apiKey) {
+    throw new Error('OLLAMA_API_KEY is not set — add it to .env.local and restart the dev server.')
+  }
+
+  const messages = [
+    { role: 'system', content: `${ASSISTANT_SYSTEM_PROMPT}\n\nData digest:\n${context}` },
+    ...history,
+    { role: 'user', content: question },
+  ]
+
+  const res = await fetch(OLLAMA_CHAT_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      stream: false,
+      messages,
+    }),
+  })
+
+  if (!res.ok) {
+    throw new Error(`Ollama ${res.status}: ${await res.text()}`)
+  }
+
+  const data = await res.json()
+  const content = data?.message?.content
+  if (typeof content !== 'string') {
+    throw new Error(`Ollama returned an unexpected response shape: ${JSON.stringify(data)}`)
+  }
+
+  return content.trim()
+}

@@ -8,7 +8,13 @@ export function daysSince(iso: string): number {
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
 }
 
-export function isStalled(p: ProductSummary, thresholdDays: number): boolean {
+// Narrowed to just the fields each function reads (rather than the full ProductSummary)
+// so callers that don't have the full catalog/COGS/returns pipeline — e.g. the assistant
+// context builder — can still reuse this exact logic instead of re-deriving it.
+type StalledFields = Pick<ProductSummary, 'lastSoldAt' | 'publishedAt' | 'createdAt'>
+type RunwayFields = Pick<ProductSummary, 'inventoryQuantity' | 'unitsSoldMonth'>
+
+export function isStalled(p: StalledFields, thresholdDays: number): boolean {
   const reference = p.lastSoldAt ?? p.publishedAt ?? p.createdAt
   if (reference == null) return false
   return daysSince(reference) >= thresholdDays
@@ -28,7 +34,7 @@ export interface StalledUnitsSummary {
 // StalledCampaignPanel's per-product potentialRevenue (ProductsInventory.tsx, roughly
 // min(audience×conversion, onHand) × discountedPrice) — that answers a different question
 // (one product's realistic ceiling for a specific audience). Keep these two separate.
-export function getStalledUnitsSummary(products: ProductSummary[]): StalledUnitsSummary {
+export function getStalledUnitsSummary(products: (StalledFields & Pick<ProductSummary, 'inventoryQuantity' | 'price'>)[]): StalledUnitsSummary {
   const list = products.filter((p) => isStalled(p, STALLED_DAYS))
   const units = list.reduce((s, p) => s + (p.inventoryQuantity ?? 0), 0)
   const potentialRevenue = list.reduce((s, p) => s + (p.price ?? 0) * (p.inventoryQuantity ?? 0), 0)
@@ -39,14 +45,14 @@ export function getStalledUnitsSummary(products: ProductSummary[]): StalledUnits
 // estimate to mean something (MIN_UNITS_FOR_RUNWAY) — below that, a single stray sale could
 // swing the number wildly. Null (not 0, not Infinity) for anything unmeasurable: no catalog
 // data, already sold out (covered by isSoldOutLive instead), or too little recent velocity.
-export function getRunwayDays(p: ProductSummary): number | null {
+export function getRunwayDays(p: RunwayFields): number | null {
   if (p.inventoryQuantity == null || p.inventoryQuantity <= 0) return null
   if (p.unitsSoldMonth < MIN_UNITS_FOR_RUNWAY) return null
   const dailyVelocity = p.unitsSoldMonth / 30
   return Math.round(p.inventoryQuantity / dailyVelocity)
 }
 
-export function isLowRunway(p: ProductSummary): boolean {
+export function isLowRunway(p: RunwayFields): boolean {
   const runway = getRunwayDays(p)
   return runway != null && runway < LOW_RUNWAY_THRESHOLD_DAYS
 }
@@ -58,7 +64,7 @@ export interface LowRunwaySummary {
 
 // Revenue at risk = On Hand × Price across flagged products — same proxy pattern as
 // getStalledUnitsSummary's potentialRevenue, ranked for the Attention Feed.
-export function getLowRunwaySummary(products: ProductSummary[]): LowRunwaySummary {
+export function getLowRunwaySummary(products: (RunwayFields & Pick<ProductSummary, 'price'>)[]): LowRunwaySummary {
   const list = products.filter(isLowRunway)
   const revenueAtRisk = list.reduce((s, p) => s + (p.price ?? 0) * (p.inventoryQuantity ?? 0), 0)
   return { count: list.length, revenueAtRisk }
