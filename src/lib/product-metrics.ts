@@ -41,6 +41,28 @@ export function getStalledUnitsSummary(products: (StalledFields & Pick<ProductSu
   return { units, potentialRevenue }
 }
 
+export interface StalledDiscountRecovery {
+  units: number
+  fullPriceValue: number
+  discountedRevenue: number
+}
+
+// Same portfolio-level population and "assumes full sell-through, no audience/conversion
+// cap" convention as getStalledUnitsSummary, just priced at a hypothetical markdown instead
+// of full price — for "what would a clearance discount on stalled stock recover" questions.
+// Still deliberately not the same thing as StalledCampaignPanel's per-product, per-audience
+// campaign estimate (see the comment on getStalledUnitsSummary above).
+export function getStalledRecoveryAtDiscount(
+  products: (StalledFields & Pick<ProductSummary, 'inventoryQuantity' | 'price'>)[],
+  discountRate: number,
+): StalledDiscountRecovery {
+  const list = products.filter((p) => isStalled(p, STALLED_DAYS))
+  const units = list.reduce((s, p) => s + (p.inventoryQuantity ?? 0), 0)
+  const fullPriceValue = list.reduce((s, p) => s + (p.price ?? 0) * (p.inventoryQuantity ?? 0), 0)
+  const discountedRevenue = list.reduce((s, p) => s + (p.price ?? 0) * (1 - discountRate) * (p.inventoryQuantity ?? 0), 0)
+  return { units, fullPriceValue, discountedRevenue }
+}
+
 // Days until stockout at recent velocity. Requires enough trailing-30-day sales for the
 // estimate to mean something (MIN_UNITS_FOR_RUNWAY) — below that, a single stray sale could
 // swing the number wildly. Null (not 0, not Infinity) for anything unmeasurable: no catalog

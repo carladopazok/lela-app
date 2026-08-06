@@ -4,7 +4,7 @@ import { computeRFM, SEGMENT_ORDER } from './rfm'
 import { readProductCategories } from './product-categories-storage'
 import { readTickets, readMacros, readAgentGuidance } from './cs-storage'
 import { REVENUE_STATUSES } from './shopify-constants'
-import { STALLED_DAYS, isStalled, getStalledUnitsSummary, isLowRunway, getRunwayDays, getLowRunwaySummary, daysSince } from './product-metrics'
+import { STALLED_DAYS, isStalled, getStalledUnitsSummary, getStalledRecoveryAtDiscount, isLowRunway, getRunwayDays, getLowRunwaySummary, daysSince } from './product-metrics'
 import type { ScoredCustomer } from './rfm'
 import type { ShopifyProduct, ShopifyOrder } from '@/types'
 
@@ -198,6 +198,42 @@ function findLowRunwayProducts(question: string, products: SimplifiedProduct[]):
     .slice(0, MAX_MATCHES)
 }
 
+// Same discount tiers offered in the Stalled Inventory campaign panel's quick-select
+// buttons (ProductsInventory.tsx's DISCOUNT_OPTIONS), minus 0% (full price is already in
+// the STALLED INVENTORY aggregate line).
+const STANDARD_DISCOUNT_TIERS = [20, 40, 60]
+const DISCOUNT_QUESTION_RE = /discount|\bmark[\s-]?down|clearance|\bsale\b|recover|\bsitewide\b|\bsite-wide\b/
+
+// "What would a 20% discount recover" needs a scenario the aggregate stats can't answer —
+// this is deliberately the portfolio-level, full-sell-through estimate (same convention as
+// getStalledUnitsSummary), NOT the per-product audience/conversion campaign math from
+// StalledCampaignPanel, which needs related-product/audience data that doesn't aggregate
+// meaningfully across many products in one shot.
+function findDiscountScenario(question: string, products: SimplifiedProduct[]): string | null {
+  const q = question.toLowerCase()
+  if (!DISCOUNT_QUESTION_RE.test(q)) return null
+
+  const activeProducts = products.filter((p) => p.status === 'active')
+  const pctMatch = q.match(/(\d{1,3})\s*%/)
+  const askedPct = pctMatch ? Math.max(0, Math.min(95, parseInt(pctMatch[1], 10))) : null
+  const tiers = askedPct != null && !STANDARD_DISCOUNT_TIERS.includes(askedPct)
+    ? [...STANDARD_DISCOUNT_TIERS, askedPct].sort((a, b) => a - b)
+    : STANDARD_DISCOUNT_TIERS
+
+  const lines = tiers.map((pct) => {
+    const { units, discountedRevenue } = getStalledRecoveryAtDiscount(activeProducts, pct / 100)
+    return `${pct}% off: ≈€${discountedRevenue.toFixed(2)} recovered from ${units} stalled units${pct === askedPct ? '  ← the question asked about this tier' : ''}`
+  })
+
+  return (
+    `STALLED-INVENTORY DISCOUNT SCENARIOS — portfolio-level estimate for clearing the CURRENT stalled backlog ` +
+    `(no sale in ${STALLED_DAYS}+ days) at a markdown. Assumes 100% sell-through of on-hand stock at the discounted ` +
+    `price — it is NOT a per-audience/conversion marketing-campaign estimate (that's a separate, per-product tool ` +
+    `elsewhere in the dashboard and isn't in this digest), and it does NOT apply to the entire catalog, only the ` +
+    `stalled portion:\n${lines.join('\n')}`
+  )
+}
+
 function formatCustomerMatch(c: ScoredCustomer): string {
   const tags = [...c.computedTags, ...c.manualTags].join(', ') || 'none'
   return `- ${c.first_name} ${c.last_name} <${c.email}>: segment=${c.segment}, orders=${c.orders_count}, AOV=€${c.aov.toFixed(2)}, last order=${c.lastOrderDate ?? 'never'}, tags=[${tags}]`
@@ -240,6 +276,9 @@ export async function buildAssistantContext(shopify: ShopifyClient, question: st
 
   const lowRunwayProducts = findLowRunwayProducts(question, snapshot.products)
   if (lowRunwayProducts.length) sections.push(`LOW RUNWAY PRODUCTS (soonest to sell out first):\n${lowRunwayProducts.map(formatProductMatch).join('\n')}`)
+
+  const discountScenario = findDiscountScenario(question, snapshot.products)
+  if (discountScenario) sections.push(discountScenario)
 
   return sections.join('\n\n')
 }
