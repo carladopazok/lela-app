@@ -494,6 +494,7 @@ function StalledCampaignPanel({
   const discountedMargin = marginAt(discountedPrice, cost)
   const costBasisAtRisk = cost != null ? cost * unitsOnHand : null
   const potentialRevenue = discountedPrice != null ? discountedPrice * buyers : 0
+  const potentialRevenueAllBuyers = discountedPrice != null ? discountedPrice * unitsOnHand : 0
 
   // Revenue range preview: buyers is discount-invariant, so the range is just revenue at the
   // two discount extremes (0% and 60%) using that same buyers figure — not tied to whichever
@@ -646,8 +647,8 @@ function StalledCampaignPanel({
         </div>
       </div>
 
-      {/* Five stat cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-5 pb-5 border-b border-sand-200">
+      {/* Six stat cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-5 pb-5 border-b border-sand-200">
         <div>
           <p className="text-xs text-charcoal-400">Price at Discount</p>
           <p className="text-base font-serif font-semibold text-charcoal-700">{discountedPrice != null ? money(discountedPrice) : '—'}</p>
@@ -675,10 +676,19 @@ function StalledCampaignPanel({
           </p>
         </div>
         <div>
-          <p className="text-xs text-charcoal-400">Potential Revenue</p>
+          <p className="text-xs text-charcoal-400">Potential Revenue (Eligible Customers)</p>
           <p className="text-base font-serif font-semibold text-olive-600">{money(potentialRevenue)}</p>
           <p className="text-[10px] text-charcoal-300">
             {buyers.toFixed(1)} buyer{buyers === 1 ? '' : 's'} × {discountedPrice != null ? money(discountedPrice) : '—'} — estimate, not guaranteed
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-charcoal-400" title="Assumes every unit on hand sells at the discounted price, including buyers who aren't existing customers yet.">
+            Potential Revenue (All Buyers)
+          </p>
+          <p className="text-base font-serif font-semibold text-olive-600">{money(potentialRevenueAllBuyers)}</p>
+          <p className="text-[10px] text-charcoal-300">
+            {unitsOnHand} unit{unitsOnHand === 1 ? '' : 's'} × {discountedPrice != null ? money(discountedPrice) : '—'} — assumes full sell-through, incl. non-customers
           </p>
         </div>
       </div>
@@ -2572,6 +2582,7 @@ export default function ProductsInventory({
       const header = [
         'Product', 'SKU', 'On Hand', 'Original Price', 'Discount %', 'Price at Discount',
         'Margin at Discount', 'Cost Basis at Risk', 'Eligible Customers', 'Projected Buyers', 'Potential Revenue',
+        'Potential Revenue (All Buyers)',
       ]
       const rows = resolvedRows.map((row) => {
         const p = row.product
@@ -2594,6 +2605,7 @@ export default function ProductsInventory({
         const K = unionIds.size
         const buyers = Math.min(K * (conversionPercent / 100), onHand)
         const potentialRevenue = discountedPrice != null ? discountedPrice * buyers : 0
+        const potentialRevenueAllBuyers = discountedPrice != null ? discountedPrice * onHand : 0
 
         return [
           p.title,
@@ -2607,6 +2619,7 @@ export default function ProductsInventory({
           String(K),
           buyers.toFixed(1),
           potentialRevenue.toFixed(2),
+          potentialRevenueAllBuyers.toFixed(2),
         ]
       })
       const csv = [header, ...rows].map((r) => r.map(csvEscape).join(',')).join('\r\n')
