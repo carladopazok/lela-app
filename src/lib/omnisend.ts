@@ -208,6 +208,20 @@ export async function omnisendListAutomations(): Promise<OmnisendAutomation[]> {
   return data.automations ?? []
 }
 
+export type OmnisendConnectionResult = { connected: true; detail: string } | { connected: false; error: string }
+
+// Live connection check for the Integrations tab — reuses the same /contacts call
+// countOmnisendContacts already relies on, just capped to 1 result.
+export async function checkOmnisendConnection(): Promise<OmnisendConnectionResult> {
+  try {
+    const data = await omnisendGet<{ contacts: unknown[] }>('/contacts', { limit: '1' })
+    const count = data.contacts?.length ?? 0
+    return { connected: true, detail: count > 0 ? 'contacts found' : 'no contacts yet' }
+  } catch (err) {
+    return { connected: false, error: err instanceof Error ? err.message : 'Unknown error contacting Omnisend' }
+  }
+}
+
 export async function omnisendFindOrCreateContact(email: string): Promise<OmnisendContactResult> {
   const search = await omnisendGet<{ contacts: OmnisendContactResult[] }>('/contacts', { email })
   const existing = search.contacts?.[0]

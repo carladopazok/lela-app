@@ -9,6 +9,7 @@ A personal ecommerce operations dashboard for [carladopazo.com](https://carladop
 - **Email Performance** — recent Omnisend campaign stats
 - **Customer Intelligence** — customer list with automatic tagging (VIP, 1-order, never-purchased, winback), synced to Shopify and Omnisend
 - **Customer Service** — Outlook inbox integration (via Microsoft Graph API) with tickets and reusable macros
+- **Integrations** — connection-status check for Odoo (auth only, no data sync yet)
 - **About This Tool** — overview page for the dashboard itself
 
 ## Getting Started
@@ -36,10 +37,13 @@ Copy `.env.local.example` to `.env.local` and fill in:
 | `OMNISEND_API_KEY` | Omnisend API key for email performance data |
 | `MS_CLIENT_ID` / `MS_CLIENT_SECRET` / `MS_TENANT_ID` | Azure app registration credentials for Microsoft Graph (Outlook integration) |
 | `OUTLOOK_EMAIL` | Mailbox address used for the Customer Service inbox |
+| `ODOO_URL` / `ODOO_DB` / `ODOO_USERNAME` / `ODOO_API_KEY` | Odoo instance credentials for the Integrations tab's connection-status check |
 
 Shopify auth uses Partner app OAuth by default. Setting `SHOPIFY_ACCESS_TOKEN` skips the OAuth flow.
 
 The Outlook integration for Customer Service requires a separate Azure app registration (Microsoft Graph API, `Mail.ReadWrite` / `Mail.Send` / `offline_access` scopes). `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, and `MS_TENANT_ID` come from that registration.
+
+The Odoo integration on the Integrations tab is a connection check only — it authenticates against Odoo's JSON-RPC API (`authenticate` on the `common` service) and reports whether the credentials work. It does not sync or display any Odoo data yet.
 
 Note: `.env.local.example` is currently missing the `SHOPIFY_ACCESS_TOKEN`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_TENANT_ID`, and `OUTLOOK_EMAIL` entries — add them there too if you want the example file to stay a complete template.
 

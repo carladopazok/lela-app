@@ -82,3 +82,16 @@ export function createShopifyClient({ accessToken, shop }: ShopifyAuth) {
 
   return { get, put, getAll, graphql }
 }
+
+export type ShopifyConnectionResult = { connected: true; detail: string } | { connected: false; error: string }
+
+// Live connection check for the Integrations tab — GET /shop.json is the simplest
+// authenticated Admin API call, returning 200 only if the token is valid for the shop.
+export async function checkShopifyConnection(auth: ShopifyAuth): Promise<ShopifyConnectionResult> {
+  try {
+    const { shop } = await createShopifyClient(auth).get<{ shop: { name: string } }>('/shop.json')
+    return { connected: true, detail: shop.name }
+  } catch (err) {
+    return { connected: false, error: err instanceof Error ? err.message : 'Unknown error contacting Shopify' }
+  }
+}

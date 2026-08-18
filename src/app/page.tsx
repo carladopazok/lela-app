@@ -11,6 +11,7 @@ import EmailPerformance from '@/components/sections/EmailPerformance'
 import CustomerIntelligence from '@/components/sections/CustomerIntelligence'
 import CustomerService from '@/components/sections/CustomerService'
 import Forecast from '@/components/sections/Forecast'
+import Integrations from '@/components/sections/Integrations'
 import PendingWork from '@/components/sections/PendingWork'
 import AboutTool from '@/components/sections/AboutTool'
 
@@ -172,6 +173,7 @@ export default function Home() {
               />
             )}
             {active === 'forecast'              && <Forecast />}
+            {active === 'integrations'          && <Integrations />}
             {active === 'pending-work'          && <PendingWork />}
             {active === 'about'                 && <AboutTool />}
           </div>
