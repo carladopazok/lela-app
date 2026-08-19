@@ -1,37 +1,4 @@
 import { ExternalLink } from 'lucide-react'
-import { LOYAL_MIN_ORDERS, VIP_MIN_ORDERS, AT_RISK_START_DAYS, LAPSED_START_DAYS, LOST_DAYS, ABANDONED_CHECKOUT_WINDOW_DAYS } from '@/lib/segmentation'
-
-// Pulled from src/lib/segmentation.ts, the single real source of truth behind both
-// the Customers tab and the Journey tab — this copy used to describe a different,
-// unwired rule set (AOV-based VIP, email-open-based "Email Ghost") that never
-// matched what the app actually computed. It's derived from the live constants now
-// so it can't drift out of sync again.
-const LOGIC_ITEMS = [
-  {
-    tag: 'VIP',
-    color: 'bg-terracotta-100 text-terracotta-700',
-    logic: `${VIP_MIN_ORDERS}+ orders, most recent within ${LOST_DAYS} days`,
-    why: "Frequency, not spend, is the strongest repeat-purchase signal I have without a store-specific AOV benchmark to lean on. VIPs get a longer recency runway than everyone else before falling out of the tier — their buying cadence is naturally slower than a one-time shopper's.",
-  },
-  {
-    tag: 'Loyal',
-    color: 'bg-olive-100 text-olive-600',
-    logic: `${LOYAL_MIN_ORDERS}–${VIP_MIN_ORDERS - 1} orders, active within ${AT_RISK_START_DAYS} days`,
-    why: 'Repeat purchasers below the VIP bar are still your most profitable segment relative to acquisition cost. They deserve acknowledgment — a community invite, referral access, or an upgrade nudge toward VIP. (A separate "Active" tier catches 2-3 order customers who haven\'t reached Loyal yet.)',
-  },
-  {
-    tag: 'At Risk / Winback',
-    color: 'bg-amber-50 text-amber-700',
-    logic: `${AT_RISK_START_DAYS}–${LAPSED_START_DAYS - 1} days since last order`,
-    why: "Lifecycle marketing's highest-leverage window. One-time buyers get a distinct 'Winback' tag instead of 'At Risk' here — a customer with exactly one order needs a different message than a repeat buyer who's slowed down.",
-  },
-  {
-    tag: 'Abandoned Checkout',
-    color: 'bg-red-50 text-red-600',
-    logic: `Open checkout within the last ${ABANDONED_CHECKOUT_WINDOW_DAYS} days`,
-    why: "An independent flag, not a lifecycle stage — a VIP can show this too if they've got a live cart on something new. A checkout that's been sitting open for months isn't a hot lead anymore, so this expires instead of counting forever.",
-  },
-]
 
 export default function AboutTool() {
   return (
@@ -46,37 +13,19 @@ export default function AboutTool() {
           email metrics that didn't surface revenue, customers I knew were slipping away but had no easy way to catch.
         </p>
         <p>
-          This is the operational layer I actually wanted. It pulls live data from Shopify and Omnisend, surfaces what
-          needs attention, and lets me write behavioral tags back to both platforms so my automations have context.
+          This is the operational layer I actually wanted. It pulls live data from Shopify and Omnisend — no cached
+          snapshots — and surfaces what needs attention: late orders, revenue-blind email performance, customers
+          showing early signs of churn.
         </p>
         <p>
-          The tagging logic reflects how I think about lifecycle marketing: not as blasts to "the list," but as
-          conversations calibrated to where someone is in their relationship with the brand. Each tag maps to a
-          distinct intervention — a different tone, a different offer, a different ask.
+          It also writes behavioral tags back to both platforms, so the context lives where your automations can
+          actually use it. You'll see those tags reflected in your Shopify customer records and Omnisend contacts,
+          not buried in a separate system.
         </p>
         <p>
-          It's also architected to grow. The API layer is clean enough to convert into a Shopify embedded app, and the
-          tag sync writes directly to Shopify customer records and Omnisend contacts so any automation tool downstream
-          can read them.
+          This is v1, built around my own workflow. The API layer is clean enough to extend — connecting with tools
+          like Gorgias, Loop, and others merchants already rely on for operations is the direction I'm exploring next.
         </p>
-      </div>
-
-      {/* Tag logic breakdown */}
-      <div className="mb-12">
-        <h3 className="font-serif text-xl text-charcoal-700 mb-5">The Tagging Logic</h3>
-        <div className="space-y-4">
-          {LOGIC_ITEMS.map((item) => (
-            <div key={item.tag} className="bg-white rounded-2xl shadow-card p-5">
-              <div className="flex items-center gap-3 mb-2">
-                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${item.color}`}>
-                  {item.tag}
-                </span>
-                <span className="text-xs text-charcoal-400 font-mono">{item.logic}</span>
-              </div>
-              <p className="text-sm text-charcoal-500 leading-relaxed">{item.why}</p>
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* Stack */}
