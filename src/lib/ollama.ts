@@ -25,6 +25,7 @@ export interface DraftTicketReplyInput {
 export interface DraftTicketReplyResult {
   tag: string
   draft: string
+  retrievedContext: RetrievedSnippet[]
 }
 
 function buildPrompt(
@@ -143,8 +144,12 @@ export async function draftTicketReply(input: DraftTicketReplyInput): Promise<Dr
     throw new Error(`Ollama response was missing "tag"/"draft" fields: ${content}`)
   }
 
-  const result = parsed as DraftTicketReplyResult
-  return { tag: result.tag, draft: appendSignature(result.draft, input.agentGuidance) }
+  const result = parsed as { tag: string; draft: string }
+  return {
+    tag: result.tag,
+    draft: appendSignature(result.draft, input.agentGuidance),
+    retrievedContext,
+  }
 }
 
 export interface AskAssistantInput {

@@ -5,7 +5,7 @@ import {
   RefreshCw, AlertCircle, Mail, ArrowLeft, Send, Plus, Trash2,
   Edit2, Check, X, Loader2, Inbox, BookOpen, ChevronDown, ChevronLeft, ChevronRight, Tag, User,
   ShieldAlert, Ban, ArrowUp, ArrowDown, ArrowUpDown, Sparkles, RotateCcw, Settings2, BookmarkPlus,
-  Instagram,
+  Instagram, Search,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
@@ -13,6 +13,7 @@ import TagBadge from '@/components/ui/TagBadge'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import { isLikelySpamSender } from '@/lib/spam-detection'
 import type { CSTicket, CSMacro, TicketStatus, TicketTag, TicketChannel, EnrichedCustomer, AgentGuidanceNote } from '@/types'
+import type { RetrievedSnippet } from '@/lib/pinecone'
 import { TICKET_TAGS } from '@/types'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -122,6 +123,8 @@ function TicketDetail({
   const [aiError, setAiError] = useState<string | null>(null)
   const [aiSuggestedTag, setAiSuggestedTag] = useState<string | null>(null)
   const [aiHasDrafted, setAiHasDrafted] = useState(false)
+  const [aiRetrievedContext, setAiRetrievedContext] = useState<RetrievedSnippet[]>([])
+  const [showRetrievedContext, setShowRetrievedContext] = useState(false)
   const [aiGuidance, setAiGuidance] = useState('')
   const [savingGuidanceNote, setSavingGuidanceNote] = useState(false)
   const [savedGuidanceNote, setSavedGuidanceNote] = useState(false)
@@ -233,6 +236,7 @@ function TicketDetail({
       setReplyBody(data.draft)
       setAiSuggestedTag(data.tag ?? null)
       setAiHasDrafted(true)
+      setAiRetrievedContext(data.retrievedContext ?? [])
     } catch (e) {
       setAiError(e instanceof Error ? e.message : 'AI draft failed')
     } finally {
@@ -525,6 +529,39 @@ function TicketDetail({
             <button onClick={() => setAiSuggestedTag(null)} className="text-charcoal-400 hover:text-charcoal-600">
               <X size={12} />
             </button>
+          </div>
+        )}
+        {aiHasDrafted && (
+          <div className="mb-3">
+            <button
+              onClick={() => setShowRetrievedContext((v) => !v)}
+              className="flex items-center gap-1.5 text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors"
+            >
+              <Search size={12} />
+              {aiRetrievedContext.length > 0
+                ? `Retrieved context (${aiRetrievedContext.length})`
+                : 'Retrieved context (none matched)'}
+              <ChevronDown size={12} className={`transition-transform ${showRetrievedContext ? 'rotate-180' : ''}`} />
+            </button>
+            {showRetrievedContext && (
+              <div className="mt-2 space-y-2 max-h-72 overflow-y-auto">
+                {aiRetrievedContext.length === 0 ? (
+                  <p className="text-xs text-charcoal-400 italic px-3 py-2">
+                    No macro or policy snippet matched this ticket closely enough — the draft was written from scratch.
+                  </p>
+                ) : (
+                  aiRetrievedContext.map((snippet, i) => (
+                    <div key={i} className="bg-sand-50 border border-sand-200 rounded-lg px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-xs font-medium text-charcoal-600">{snippet.source}</span>
+                        <span className="text-[10px] text-charcoal-400 shrink-0">relevance {snippet.score.toFixed(2)}</span>
+                      </div>
+                      <p className="text-xs text-charcoal-500 whitespace-pre-wrap leading-relaxed">{snippet.content}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         )}
         <textarea
