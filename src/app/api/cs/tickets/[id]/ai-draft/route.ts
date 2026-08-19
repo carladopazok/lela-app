@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
-import { readTickets, readMacros, readCustomTags, readHiddenTags, readAgentGuidance } from '@/lib/cs-storage'
+import { readTickets, readCustomTags, readHiddenTags, readAgentGuidance } from '@/lib/cs-storage'
 import { draftTicketReply, type AiDraftCustomerContext } from '@/lib/ollama'
 import { TICKET_TAGS } from '@/types'
 
@@ -27,7 +27,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       subject: ticket.subject,
       thread: ticket.thread,
       availableTags,
-      macros: readMacros(),
       customer,
       agentGuidance: readAgentGuidance(),
       guidance,

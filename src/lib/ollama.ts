@@ -1,4 +1,5 @@
-import type { CSMessage, CSMacro, AgentGuidance } from '@/types'
+import type { CSMessage, AgentGuidance } from '@/types'
+import { retrieveContext, type RetrievedSnippet } from './pinecone'
 
 const OLLAMA_CHAT_URL = 'https://ollama.com/api/chat'
 const MODEL = 'gemma4:cloud'
@@ -16,7 +17,6 @@ export interface DraftTicketReplyInput {
   subject: string
   thread: CSMessage[]
   availableTags: string[]
-  macros: CSMacro[]
   customer?: AiDraftCustomerContext | null
   agentGuidance?: AgentGuidance | null
   guidance?: string
@@ -27,14 +27,14 @@ export interface DraftTicketReplyResult {
   draft: string
 }
 
-function buildPrompt({ subject, thread, availableTags, macros, customer, agentGuidance, guidance }: DraftTicketReplyInput): string {
-  const threadText = thread
-    .map((m) => `[${m.direction}] ${m.direction === 'inbound' ? m.from : 'agent'}: ${m.body}`)
-    .join('\n\n')
-
-  const macroText = macros.length
-    ? macros.map((m) => `- "${m.name}":\n${m.body}`).join('\n\n')
-    : '(no macros defined)'
+function buildPrompt(
+  { subject, thread, availableTags, customer, agentGuidance, guidance }: DraftTicketReplyInput,
+  threadText: string,
+  retrievedContext: RetrievedSnippet[]
+): string {
+  const contextText = retrievedContext.length
+    ? retrievedContext.map((s) => `- (from "${s.source}", relevance ${s.score.toFixed(2)}):\n${s.content}`).join('\n\n')
+    : '(no matching macro or policy content found)'
 
   const customerText = customer
     ? `Orders: ${customer.orders_count}, AOV: ${customer.aov.toFixed(2)}, Last order: ${customer.lastOrderDate ?? 'never'}, ` +
@@ -52,7 +52,7 @@ function buildPrompt({ subject, thread, availableTags, macros, customer, agentGu
     ? `\n\nAdditional guidance from the agent for this specific draft only — follow this in addition to the standing instructions above:\n${guidance.trim()}`
     : ''
 
-  return `You are a customer service assistant for an ecommerce store. Given the ticket below, suggest the single best-fitting tag from the available tag list, and draft a reply. If one of the macros closely matches the situation, adapt it to the specifics of this ticket rather than writing from scratch; otherwise write a fresh reply in a similar tone.
+  return `You are a customer service assistant for an ecommerce store. Given the ticket below, suggest the single best-fitting tag from the available tag list, and draft a reply. If the retrieved context below (a macro or policy excerpt) closely matches the situation, adapt it to the specifics of this ticket rather than writing from scratch; otherwise write a fresh reply in a similar tone. The retrieved context was chosen by semantic search against this ticket, but may still be irrelevant — ignore it if it doesn't actually fit.
 
 Subject: ${subject}
 
@@ -61,13 +61,13 @@ ${threadText}
 
 Available tags (pick exactly one, verbatim from this list): ${availableTags.join(', ')}
 
-Macros:
-${macroText}
+Retrieved context (macros/policy excerpts most relevant to this ticket):
+${contextText}
 
 Customer context:
 ${customerText}${standingGuidanceText}${guidanceText}
 
-Respond with ONLY a raw JSON object, no markdown code fences, no backticks, no explanation before or after — just the JSON object with exactly two string keys "tag" and "draft". "tag" must be one of the available tags listed above, verbatim. "draft" is the reply body only — no subject line, and no closing signature or sign-off name, even if a macro includes one; any signature is appended automatically afterward.`
+Respond with ONLY a raw JSON object, no markdown code fences, no backticks, no explanation before or after — just the JSON object with exactly two string keys "tag" and "draft". "tag" must be one of the available tags listed above, verbatim. "draft" is the reply body only — no subject line, and no closing signature or sign-off name, even if the retrieved context includes one; any signature is appended automatically afterward.`
 }
 
 // Deterministic — not model-dependent, since a standing signature/footer must appear on
@@ -93,6 +93,14 @@ export async function draftTicketReply(input: DraftTicketReplyInput): Promise<Dr
     throw new Error('OLLAMA_API_KEY is not set — add it to .env.local and restart the dev server.')
   }
 
+  const threadText = input.thread
+    .map((m) => `[${m.direction}] ${m.direction === 'inbound' ? m.from : 'agent'}: ${m.body}`)
+    .join('\n\n')
+
+  // Retrieval step (Pinecone) runs before generation (gemma4) — semantic search against
+  // the ticket content replaces the old approach of dumping every macro into the prompt.
+  const retrievedContext = await retrieveContext(`${input.subject}\n\n${threadText}`)
+
   const res = await fetch(OLLAMA_CHAT_URL, {
     method: 'POST',
     headers: {
@@ -102,7 +110,7 @@ export async function draftTicketReply(input: DraftTicketReplyInput): Promise<Dr
     body: JSON.stringify({
       model: MODEL,
       stream: false,
-      messages: [{ role: 'user', content: buildPrompt(input) }],
+      messages: [{ role: 'user', content: buildPrompt(input, threadText, retrievedContext) }],
       // Ollama's JSON-schema `format` field is silently ignored by gemma4:cloud (verified
       // against the docs' own schema example — it just returns free-form prose). Plain
       // `format: "json"` does work, so structure is enforced via the prompt instead.
