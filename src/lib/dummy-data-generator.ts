@@ -502,6 +502,7 @@ export async function generateDummyData(session: Session): Promise<DummyDataSumm
 
     tickets.push({
       id: randomUUID(),
+      channel: 'email',
       subject: template.subject,
       from: person.email,
       fromName: person.name,

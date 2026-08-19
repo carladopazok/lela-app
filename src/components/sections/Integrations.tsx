@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { CheckCircle2, XCircle, Plug, RefreshCw, ShoppingBag, Mail } from 'lucide-react'
+import { CheckCircle2, XCircle, Plug, RefreshCw, ShoppingBag, Mail, Instagram } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 
 type ConnectionStatus = { connected: true; detail?: string } | { connected: false; error: string }
@@ -35,6 +35,13 @@ const INTEGRATIONS: IntegrationDef[] = [
     Icon: Plug,
     statusUrl: '/api/odoo/status',
     connectedNote: 'No data synced yet — coming soon.',
+  },
+  {
+    key: 'instagram',
+    name: 'Instagram',
+    Icon: Instagram,
+    statusUrl: '/api/instagram/status',
+    connectedNote: 'Powers the Instagram tab in Customer Service.',
   },
 ]
 

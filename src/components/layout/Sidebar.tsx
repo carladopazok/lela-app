@@ -6,9 +6,9 @@ import { useDummyData } from '@/lib/dummy-data-context'
 
 export type SectionId = 'attention-feed' | 'sales-overview' | 'late-shipments' | 'products-inventory' | 'email-performance' | 'customer-intelligence' | 'customer-service' | 'forecast' | 'integrations' | 'pending-work' | 'about'
 
-// Main nav — Pending Work is rendered separately below, set apart at the bottom of the
-// nav column. About This Tool lives outside the nav entirely, as a small link under the
-// wordmark (see the header block in the component below).
+// Main nav — Pending Work and Integrations are rendered separately below, set apart (smaller)
+// at the bottom of the nav column. About This Tool lives outside the nav entirely, as a small
+// link under the wordmark (see the header block in the component below).
 const NAV_ITEMS: { id: SectionId; label: string; Icon: React.ElementType }[] = [
   { id: 'attention-feed',        label: 'Attention Feed',       Icon: Bell },
   { id: 'sales-overview',        label: 'Sales Overview',       Icon: TrendingUp },
@@ -18,7 +18,11 @@ const NAV_ITEMS: { id: SectionId; label: string; Icon: React.ElementType }[] = [
   { id: 'customer-intelligence', label: 'Customer Intelligence',Icon: Users },
   { id: 'customer-service',      label: 'Customer Service',     Icon: HeadphonesIcon },
   { id: 'forecast',              label: 'Revenue Forecast',     Icon: LineChart },
-  { id: 'integrations',          label: 'Integrations',         Icon: Plug },
+]
+
+const SECONDARY_NAV_ITEMS: { id: SectionId; label: string; Icon: React.ElementType }[] = [
+  { id: 'pending-work', label: 'Pending Work', Icon: ListTodo },
+  { id: 'integrations', label: 'Integrations', Icon: Plug },
 ]
 
 interface SidebarProps {
@@ -80,16 +84,19 @@ export default function Sidebar({ active, onSelect }: SidebarProps) {
           </button>
         ))}
 
-        <div className="mt-4 pt-4 border-t border-olive-600">
-          <button
-            onClick={() => onSelect('pending-work')}
-            className={`flex items-center gap-3 px-4 py-2 rounded-lg text-xs font-medium transition-all duration-150 w-full text-left ${
-              active === 'pending-work' ? 'bg-terracotta-500 text-white' : 'text-olive-200 hover:bg-olive-600 hover:text-white'
-            }`}
-          >
-            <ListTodo size={13} strokeWidth={1.8} />
-            <span>Pending Work</span>
-          </button>
+        <div className="mt-4 pt-4 border-t border-olive-600 flex flex-col gap-1">
+          {SECONDARY_NAV_ITEMS.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              onClick={() => onSelect(id)}
+              className={`flex items-center gap-3 px-4 py-2 rounded-lg text-xs font-medium transition-all duration-150 w-full text-left ${
+                active === id ? 'bg-terracotta-500 text-white' : 'text-olive-200 hover:bg-olive-600 hover:text-white'
+              }`}
+            >
+              <Icon size={13} strokeWidth={1.8} />
+              <span>{label}</span>
+            </button>
+          ))}
         </div>
       </nav>
 

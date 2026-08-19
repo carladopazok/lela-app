@@ -5,13 +5,14 @@ import {
   RefreshCw, AlertCircle, Mail, ArrowLeft, Send, Plus, Trash2,
   Edit2, Check, X, Loader2, Inbox, BookOpen, ChevronDown, ChevronLeft, ChevronRight, Tag, User,
   ShieldAlert, Ban, ArrowUp, ArrowDown, ArrowUpDown, Sparkles, RotateCcw, Settings2, BookmarkPlus,
+  Instagram,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import TagBadge from '@/components/ui/TagBadge'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import { isLikelySpamSender } from '@/lib/spam-detection'
-import type { CSTicket, CSMacro, TicketStatus, TicketTag, EnrichedCustomer, AgentGuidanceNote } from '@/types'
+import type { CSTicket, CSMacro, TicketStatus, TicketTag, TicketChannel, EnrichedCustomer, AgentGuidanceNote } from '@/types'
 import { TICKET_TAGS } from '@/types'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -328,7 +329,15 @@ function TicketDetail({
       <div className="bg-white rounded-2xl shadow-card p-6 mb-4">
         <div className="flex items-start justify-between gap-3">
           <h3 className="font-serif text-xl text-charcoal-700 mb-1">{ticket.subject}</h3>
-          {onNavigateToCustomer && (
+          {ticket.channel === 'instagram' ? (
+            <button
+              disabled
+              title="Not available for Instagram — no email on file"
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-charcoal-300 bg-sand-100 border border-sand-200 rounded-lg cursor-not-allowed"
+            >
+              <User size={12} /> View customer profile
+            </button>
+          ) : onNavigateToCustomer && (
             <button
               onClick={() => onNavigateToCustomer(ticket.from)}
               className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-terracotta-600 hover:text-terracotta-700 bg-terracotta-50 hover:bg-terracotta-100 border border-terracotta-200 rounded-lg transition-colors"
@@ -345,7 +354,8 @@ function TicketDetail({
               email={ticket.from}
               hidden={emailHidden}
               onToggle={onToggleEmail}
-              mailto
+              mailto={ticket.channel !== 'instagram'}
+              itemLabel={ticket.channel === 'instagram' ? 'contact info' : 'email'}
               className="text-terracotta-500"
             />
             {' '}·{' '}{fmtDate(ticket.receivedAt)}
@@ -1229,36 +1239,73 @@ function TagsOverview({
   )
 }
 
-// ─── Main section ────────────────────────────────────────────────────────────
+// ─── Tickets Pane (shared between the "Tickets" (email) and "Instagram" tabs) ────────────────
 
-export default function CustomerService({
+function TicketsPane({
+  channel,
+  allTickets,
+  setTickets,
+  macros,
+  customTags,
+  setCustomTags,
+  hiddenTags,
+  customers,
+  customerTagByEmail,
+  connected,
+  connectHref,
+  ConnectIcon,
+  connectTitle,
+  connectDescription,
+  connectButtonLabel,
+  itemLabel,
+  syncing,
+  onSync,
+  syncIdleLabel,
+  emptyHint,
+  onNavigateToCustomer,
   openTicketId,
   onOpenTicketHandled,
   openReplyBody,
   onOpenReplyBodyHandled,
-  onNavigateToCustomer,
-  onBackToSalesOverview,
 }: {
+  channel: TicketChannel
+  allTickets: CSTicket[]
+  setTickets: React.Dispatch<React.SetStateAction<CSTicket[]>>
+  macros: CSMacro[]
+  customTags: string[]
+  setCustomTags: React.Dispatch<React.SetStateAction<string[]>>
+  hiddenTags: string[]
+  customers: EnrichedCustomer[]
+  customerTagByEmail: Map<string, string>
+  connected: boolean
+  connectHref: string
+  ConnectIcon: typeof Mail
+  connectTitle: string
+  connectDescription: string
+  connectButtonLabel: string
+  itemLabel: string
+  syncing: boolean
+  onSync: () => void
+  syncIdleLabel: string
+  emptyHint: string
+  onNavigateToCustomer?: (email: string) => void
   openTicketId?: string | null
   onOpenTicketHandled?: () => void
   openReplyBody?: string | null
   onOpenReplyBodyHandled?: () => void
-  onNavigateToCustomer?: (email: string) => void
-  onBackToSalesOverview?: () => void
-} = {}) {
-  const [tab, setTab] = useState<'tickets' | 'macros' | 'tags' | 'agent'>('tickets')
-  const [tickets, setTickets] = useState<CSTicket[]>([])
-  const [macros, setMacros] = useState<CSMacro[]>([])
-  const [customTags, setCustomTags] = useState<string[]>([])
-  const [hiddenTags, setHiddenTags] = useState<string[]>([])
-  const [msConnected, setMsConnected] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [syncing, setSyncing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+}) {
   const [statusFilter, setStatusFilter] = useState<TicketStatus>('open')
   const [searchQuery, setSearchQuery] = useState('')
   const [sortKey, setSortKey] = useState<TicketSortKey>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [selectedTicket, setSelectedTicket] = useState<CSTicket | null>(null)
+  const [pendingReplyBody, setPendingReplyBody] = useState<{ ticketId: string; body: string } | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [bulkMoving, setBulkMoving] = useState(false)
+  const [hiddenEmails, setHiddenEmails] = useState<Set<string>>(new Set())
+
+  const tickets = useMemo(() => allTickets.filter((t) => t.channel === channel), [allTickets, channel])
 
   function handleSort(key: TicketSortKey) {
     if (sortKey === key) {
@@ -1268,21 +1315,6 @@ export default function CustomerService({
       setSortDir(key === 'date' ? 'desc' : 'asc')
     }
   }
-  const [selectedTicket, setSelectedTicket] = useState<CSTicket | null>(null)
-  const [pendingReplyBody, setPendingReplyBody] = useState<{ ticketId: string; body: string } | null>(null)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [bulkDeleting, setBulkDeleting] = useState(false)
-  const [bulkMoving, setBulkMoving] = useState(false)
-  const [hiddenEmails, setHiddenEmails] = useState<Set<string>>(new Set())
-  const [customers, setCustomers] = useState<EnrichedCustomer[]>([])
-
-  const customerTagByEmail = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const c of customers) {
-      if (c.email && c.computedTags?.length) map.set(c.email.toLowerCase(), c.computedTags[0])
-    }
-    return map
-  }, [customers])
 
   function toggleEmailVisibility(email: string) {
     const key = email.toLowerCase()
@@ -1298,65 +1330,20 @@ export default function CustomerService({
     setHiddenEmails(allEmailsHidden ? new Set() : new Set(tickets.map((t) => t.from.toLowerCase())))
   }
 
-  const { includeDummy } = useDummyData()
-
-  const loadTickets = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [ticketRes, macroRes, tagRes, custRes] = await Promise.all([
-        fetch(withDummyParam('/api/cs/tickets', includeDummy)),
-        fetch('/api/cs/macros'),
-        fetch('/api/cs/tags'),
-        fetch(withDummyParam('/api/shopify/customers', includeDummy)),
-      ])
-      const td = await ticketRes.json()
-      const md = await macroRes.json()
-      const tgd = await tagRes.json()
-      const cd = await custRes.json()
-      if (!ticketRes.ok) throw new Error(td.error)
-      setTickets(td.tickets ?? [])
-      setMsConnected(td.msConnected ?? false)
-      setMacros(md.macros ?? [])
-      setCustomTags(tgd.tags ?? [])
-      setHiddenTags(tgd.hidden ?? [])
-      if (custRes.ok) setCustomers(cd.customers ?? [])
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load')
-    } finally {
-      setLoading(false)
-    }
-  }, [includeDummy])
-
-  useEffect(() => { loadTickets() }, [loadTickets])
-
+  // Deep-links (e.g. from the shipping-delay/sold-out-ticket flows in Sales Overview) always
+  // target a ticket already loaded into `tickets` for this pane's channel.
   useEffect(() => {
-    if (!openTicketId || loading) return
+    if (!openTicketId) return
     const found = tickets.find((t) => t.id === openTicketId)
     if (found) {
       setStatusFilter(found.status)
       setSelectedTicket(found)
       setPendingReplyBody(openReplyBody ? { ticketId: found.id, body: openReplyBody } : null)
-      setTab('tickets')
     }
     onOpenTicketHandled?.()
     onOpenReplyBodyHandled?.()
-  }, [openTicketId, loading, tickets, onOpenTicketHandled, openReplyBody, onOpenReplyBodyHandled])
-
-  async function sync() {
-    setSyncing(true)
-    setError(null)
-    try {
-      const res = await fetch('/api/cs/tickets/sync', { method: 'POST' })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      await loadTickets()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sync failed')
-    } finally {
-      setSyncing(false)
-    }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTicketId])
 
   const q = searchQuery.trim().toLowerCase()
   const filtered = tickets
@@ -1405,7 +1392,8 @@ export default function CustomerService({
 
   async function bulkDelete() {
     if (selectedIds.size === 0) return
-    if (!confirm(`Delete ${selectedIds.size} ticket${selectedIds.size > 1 ? 's' : ''}? This also removes them from Outlook.`)) return
+    const remoteNote = channel === 'email' ? ' This also removes them from Outlook.' : ' This cannot be undone.'
+    if (!confirm(`Delete ${selectedIds.size} ticket${selectedIds.size > 1 ? 's' : ''}?${remoteNote}`)) return
     setBulkDeleting(true)
     await Promise.all(
       Array.from(selectedIds).map((id) => fetch(`/api/cs/tickets/${id}`, { method: 'DELETE' }))
@@ -1450,6 +1438,352 @@ export default function CustomerService({
     spam: tickets.filter((t) => t.status === 'spam').length,
   }
 
+  if (!connected) {
+    return (
+      <div className="text-center py-20 bg-white rounded-2xl shadow-card">
+        <ConnectIcon size={32} className="mx-auto text-charcoal-300 mb-4" />
+        <h3 className="font-serif text-xl text-charcoal-600 mb-2">{connectTitle}</h3>
+        <p className="text-sm text-charcoal-400 mb-6">{connectDescription}</p>
+        <a
+          href={connectHref}
+          className="inline-flex items-center gap-2 px-6 py-2.5 bg-terracotta-500 hover:bg-terracotta-600 text-white text-sm font-medium rounded-xl transition-colors"
+        >
+          <ConnectIcon size={14} /> {connectButtonLabel}
+        </a>
+      </div>
+    )
+  }
+
+  if (selectedTicket) {
+    const idx = filtered.findIndex((t) => t.id === selectedTicket.id)
+    return (
+      <TicketDetail
+        key={selectedTicket.id}
+        ticket={selectedTicket}
+        macros={macros}
+        customTags={customTags}
+        hiddenTags={hiddenTags}
+        hasPrev={idx > 0}
+        hasNext={idx < filtered.length - 1}
+        onPrev={() => setSelectedTicket(filtered[idx - 1])}
+        onNext={() => setSelectedTicket(filtered[idx + 1])}
+        onBack={() => { setSelectedTicket(null); setPendingReplyBody(null) }}
+        initialReplyBody={pendingReplyBody?.ticketId === selectedTicket.id ? pendingReplyBody.body : undefined}
+        onTagCreated={(tag) => setCustomTags((prev) => prev.includes(tag) ? prev : [...prev, tag])}
+        onNavigateToCustomer={onNavigateToCustomer}
+        emailHidden={hiddenEmails.has(selectedTicket.from.toLowerCase())}
+        onToggleEmail={() => toggleEmailVisibility(selectedTicket.from)}
+        customerTag={customerTagByEmail.get(selectedTicket.from.toLowerCase())}
+        customers={customers}
+        onUpdated={(updated) => {
+          setTickets((prev) => prev.map((t) => t.id === updated.id ? updated : t))
+          setSelectedTicket(updated)
+        }}
+        onDeleted={(id) => {
+          setTickets((prev) => prev.filter((t) => t.id !== id))
+          setSelectedTicket(null)
+        }}
+      />
+    )
+  }
+
+  return (
+    <>
+      {/* Toolbar */}
+      <div className="flex flex-col gap-3 mb-5">
+        <div className="flex items-center justify-between">
+          <div className="flex gap-1.5 items-center flex-wrap">
+            {(['open', 'needs attention', 'archived', 'resolved', 'spam'] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => { setStatusFilter(s); setSelectedIds(new Set()) }}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg capitalize transition-colors
+                  ${statusFilter === s
+                    ? 'bg-terracotta-500 text-white'
+                    : 'bg-white border border-sand-300 text-charcoal-500 hover:bg-sand-100'
+                  }`}
+              >
+                {s} {counts[s] > 0 && <span className="ml-1 opacity-70">({counts[s]})</span>}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            <HideAllEmailsButton allHidden={allEmailsHidden} onClick={toggleAllEmails} itemLabel={itemLabel === 'email' ? 'emails' : 'contacts'} />
+            <button
+              onClick={onSync}
+              disabled={syncing}
+              className="flex items-center gap-2 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-terracotta-100 disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+              {syncing ? 'Syncing…' : syncIdleLabel}
+            </button>
+          </div>
+        </div>
+
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-2 px-4 py-2.5 bg-terracotta-50 border border-terracotta-200 rounded-xl flex-wrap">
+            <span className="text-xs font-semibold text-terracotta-700 mr-1">
+              {selectedIds.size} selected — move to:
+            </span>
+            {(['open', 'needs attention', 'archived', 'resolved', 'spam'] as const)
+              .filter((s) => s !== statusFilter && s !== 'spam')
+              .map((s) => (
+                <button
+                  key={s}
+                  onClick={() => bulkChangeStatus(s)}
+                  disabled={bulkMoving || bulkDeleting}
+                  className="px-3 py-1 text-xs font-medium rounded-lg capitalize border border-sand-300 bg-white text-charcoal-600 hover:bg-sand-100 transition-colors disabled:opacity-50"
+                >
+                  {bulkMoving ? <Loader2 size={10} className="animate-spin inline mr-1" /> : null}
+                  {s}
+                </button>
+              ))}
+            {statusFilter !== 'spam' && (
+              <button
+                onClick={() => bulkChangeStatus('spam')}
+                disabled={bulkMoving || bulkDeleting}
+                className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {bulkMoving ? <Loader2 size={10} className="animate-spin" /> : <Ban size={10} />}
+                Mark as spam
+              </button>
+            )}
+            <div className="ml-auto">
+              <button
+                onClick={bulkDelete}
+                disabled={bulkDeleting || bulkMoving}
+                className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {bulkDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                Delete
+              </button>
+            </div>
+          </div>
+        )}
+
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder={`Search by sender or message content…`}
+          className="w-full text-sm border border-sand-300 rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-terracotta-200 focus:border-terracotta-400 transition-all placeholder:text-charcoal-300 bg-white"
+        />
+      </div>
+
+      {/* Ticket list */}
+      {filtered.length === 0 ? (
+        <div className="text-center py-16 bg-white rounded-2xl shadow-card text-charcoal-400">
+          <Inbox size={28} className="mx-auto mb-3 opacity-50" />
+          <p className="font-medium">{q ? 'No matching tickets' : 'No tickets'}</p>
+          <p className="text-sm mt-1">{q ? 'Try a different search term.' : emptyHint}</p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl shadow-card overflow-hidden">
+          <div className="overflow-x-auto">
+          <table className="w-full table-fixed text-sm">
+            <thead>
+              <tr className="bg-sand-100 text-left">
+                <th className="pl-5 pr-2 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    className="rounded border-sand-400 text-terracotta-500 focus:ring-terracotta-300 cursor-pointer"
+                  />
+                </th>
+                <SortableTh label="From" sortKeyValue="from" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[22%]" />
+                <SortableTh label="Subject" sortKeyValue="subject" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[26%]" />
+                <SortableTh label="Date" sortKeyValue="date" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[16%]" />
+                <SortableTh label="Status" sortKeyValue="status" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[12%]" />
+                <SortableTh label="Stage" sortKeyValue="stage" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[12%]" />
+                <SortableTh label="Tags" sortKeyValue="tags" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[12%]" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-sand-200">
+              {filtered.map((t) => {
+                const custTag = customerTagByEmail.get(t.from.toLowerCase())
+                return (
+                <tr
+                  key={t.id}
+                  onClick={() => setSelectedTicket(t)}
+                  className={`hover:bg-cream-100 cursor-pointer transition-colors ${selectedIds.has(t.id) ? 'bg-terracotta-50' : ''}`}
+                >
+                  <td className="pl-5 pr-2 py-4" onClick={(e) => toggleOne(t.id, e)}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(t.id)}
+                      onChange={() => {}}
+                      className="rounded border-sand-400 text-terracotta-500 focus:ring-terracotta-300 cursor-pointer"
+                    />
+                  </td>
+                  <td className="px-4 py-4 min-w-0" onClick={(e) => e.stopPropagation()}>
+                    <p className="font-medium text-charcoal-700 flex items-center gap-1.5 min-w-0">
+                      <span className="truncate">{t.fromName}</span>
+                      {isLikelySpamSender(t.from) && (
+                        <span title="Possible spam sender">
+                          <ShieldAlert size={13} className="text-red-500 shrink-0" />
+                        </span>
+                      )}
+                      {isLikelySpamSender(t.from) && t.status !== 'spam' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); quickMarkSpam(t.id) }}
+                          title="Mark as spam"
+                          className="text-red-400 hover:text-red-600 transition-colors shrink-0"
+                        >
+                          <Ban size={13} />
+                        </button>
+                      )}
+                    </p>
+                    <p className="text-xs text-charcoal-400 mt-0.5 truncate">
+                      <MaskedEmail
+                        email={t.from}
+                        hidden={hiddenEmails.has(t.from.toLowerCase())}
+                        onToggle={() => toggleEmailVisibility(t.from)}
+                        itemLabel={itemLabel}
+                      />
+                    </p>
+                  </td>
+                  <td className="px-4 py-4 text-charcoal-600 truncate">{t.subject}</td>
+                  <td className="px-4 py-4 text-charcoal-400 truncate">{fmtDate(t.receivedAt)}</td>
+                  <td className="px-4 py-4">
+                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium capitalize ${STATUS_STYLES[t.status]}`}>
+                      {t.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-4">
+                    {custTag ? <TagBadge tag={custTag} /> : <span className="text-xs text-charcoal-300">—</span>}
+                  </td>
+                  <td className="px-4 py-4">
+                    <div className="flex flex-wrap gap-1">
+                      {t.tags.length > 0
+                        ? t.tags.map((tag) => (
+                            <span key={tag} className="px-2 py-0.5 rounded-full text-xs bg-sand-100 text-charcoal-500 border border-sand-200 capitalize">
+                              {tag}
+                            </span>
+                          ))
+                        : <span className="text-xs text-charcoal-300">—</span>}
+                    </div>
+                  </td>
+                </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ─── Main section ────────────────────────────────────────────────────────────
+
+export default function CustomerService({
+  openTicketId,
+  onOpenTicketHandled,
+  openReplyBody,
+  onOpenReplyBodyHandled,
+  onNavigateToCustomer,
+  onBackToSalesOverview,
+}: {
+  openTicketId?: string | null
+  onOpenTicketHandled?: () => void
+  openReplyBody?: string | null
+  onOpenReplyBodyHandled?: () => void
+  onNavigateToCustomer?: (email: string) => void
+  onBackToSalesOverview?: () => void
+} = {}) {
+  const [tab, setTab] = useState<'tickets' | 'instagram' | 'macros' | 'tags' | 'agent'>('tickets')
+  const [tickets, setTickets] = useState<CSTicket[]>([])
+  const [macros, setMacros] = useState<CSMacro[]>([])
+  const [customTags, setCustomTags] = useState<string[]>([])
+  const [hiddenTags, setHiddenTags] = useState<string[]>([])
+  const [msConnected, setMsConnected] = useState(false)
+  const [igConnected, setIgConnected] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [syncing, setSyncing] = useState(false)
+  const [syncingInstagram, setSyncingInstagram] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [customers, setCustomers] = useState<EnrichedCustomer[]>([])
+
+  const customerTagByEmail = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const c of customers) {
+      if (c.email && c.computedTags?.length) map.set(c.email.toLowerCase(), c.computedTags[0])
+    }
+    return map
+  }, [customers])
+
+  const { includeDummy } = useDummyData()
+
+  const loadTickets = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [ticketRes, macroRes, tagRes, custRes] = await Promise.all([
+        fetch(withDummyParam('/api/cs/tickets', includeDummy)),
+        fetch('/api/cs/macros'),
+        fetch('/api/cs/tags'),
+        fetch(withDummyParam('/api/shopify/customers', includeDummy)),
+      ])
+      const td = await ticketRes.json()
+      const md = await macroRes.json()
+      const tgd = await tagRes.json()
+      const cd = await custRes.json()
+      if (!ticketRes.ok) throw new Error(td.error)
+      setTickets(td.tickets ?? [])
+      setMsConnected(td.msConnected ?? false)
+      setIgConnected(td.igConnected ?? false)
+      setMacros(md.macros ?? [])
+      setCustomTags(tgd.tags ?? [])
+      setHiddenTags(tgd.hidden ?? [])
+      if (custRes.ok) setCustomers(cd.customers ?? [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load')
+    } finally {
+      setLoading(false)
+    }
+  }, [includeDummy])
+
+  useEffect(() => { loadTickets() }, [loadTickets])
+
+  // Deep-links only ever target email tickets today (Sales Overview's shipping-delay/sold-out
+  // flows) — jump to the Tickets tab; the email TicketsPane instance handles the actual selection.
+  useEffect(() => {
+    if (!openTicketId || loading) return
+    if (tickets.some((t) => t.id === openTicketId)) setTab('tickets')
+  }, [openTicketId, loading, tickets])
+
+  async function sync() {
+    setSyncing(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/cs/tickets/sync', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      await loadTickets()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Sync failed')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function syncInstagram() {
+    setSyncingInstagram(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/cs/instagram/sync', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      await loadTickets()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Sync failed')
+    } finally {
+      setSyncingInstagram(false)
+    }
+  }
+
   return (
     <section className="max-w-full">
       {onBackToSalesOverview && (
@@ -1469,28 +1803,35 @@ export default function CustomerService({
         {/* Tabs */}
         <div className="flex items-center gap-1 bg-sand-100 rounded-xl p-1">
           <button
-            onClick={() => { setTab('tickets'); setSelectedTicket(null) }}
+            onClick={() => setTab('tickets')}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
               ${tab === 'tickets' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
           >
             <Inbox size={13} /> Tickets
           </button>
           <button
-            onClick={() => { setTab('tags'); setSelectedTicket(null) }}
+            onClick={() => setTab('instagram')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
+              ${tab === 'instagram' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
+          >
+            <Instagram size={13} /> Instagram
+          </button>
+          <button
+            onClick={() => setTab('tags')}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
               ${tab === 'tags' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
           >
             <Tag size={13} /> Tags
           </button>
           <button
-            onClick={() => { setTab('macros'); setSelectedTicket(null) }}
+            onClick={() => setTab('macros')}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
               ${tab === 'macros' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
           >
             <BookOpen size={13} /> Macros
           </button>
           <button
-            onClick={() => { setTab('agent'); setSelectedTicket(null) }}
+            onClick={() => setTab('agent')}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
               ${tab === 'agent' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
           >
@@ -1509,9 +1850,7 @@ export default function CustomerService({
           customTags={customTags}
           hiddenTags={hiddenTags}
           onSelectTicket={(ticket) => {
-            setStatusFilter(ticket.status)
-            setSelectedTicket(ticket)
-            setTab('tickets')
+            setTab(ticket.channel === 'instagram' ? 'instagram' : 'tickets')
           }}
           onTagDeleted={(tag, isPredefined) => {
             if (isPredefined) {
@@ -1525,7 +1864,7 @@ export default function CustomerService({
         />
       )}
 
-      {tab === 'tickets' && (
+      {(tab === 'tickets' || tab === 'instagram') && (
         <>
           {loading && <LoadingSpinner label="Loading tickets…" />}
 
@@ -1535,239 +1874,60 @@ export default function CustomerService({
             </div>
           )}
 
-          {!loading && !msConnected && (
-            <div className="text-center py-20 bg-white rounded-2xl shadow-card">
-              <Mail size={32} className="mx-auto text-charcoal-300 mb-4" />
-              <h3 className="font-serif text-xl text-charcoal-600 mb-2">Connect your Outlook inbox</h3>
-              <p className="text-sm text-charcoal-400 mb-6">Sign in once to start syncing support emails from hola@carladopazo.com</p>
-              <a
-                href="/api/ms/auth"
-                className="inline-flex items-center gap-2 px-6 py-2.5 bg-terracotta-500 hover:bg-terracotta-600 text-white text-sm font-medium rounded-xl transition-colors"
-              >
-                <Mail size={14} /> Connect Outlook
-              </a>
-            </div>
+          {!loading && tab === 'tickets' && (
+            <TicketsPane
+              channel="email"
+              allTickets={tickets}
+              setTickets={setTickets}
+              macros={macros}
+              customTags={customTags}
+              setCustomTags={setCustomTags}
+              hiddenTags={hiddenTags}
+              customers={customers}
+              customerTagByEmail={customerTagByEmail}
+              connected={msConnected}
+              connectHref="/api/ms/auth"
+              ConnectIcon={Mail}
+              connectTitle="Connect your Outlook inbox"
+              connectDescription="Sign in once to start syncing support emails from hola@carladopazo.com"
+              connectButtonLabel="Connect Outlook"
+              itemLabel="email"
+              syncing={syncing}
+              onSync={sync}
+              syncIdleLabel="Sync inbox"
+              emptyHint='Click "Sync inbox" to pull in new emails.'
+              onNavigateToCustomer={onNavigateToCustomer}
+              openTicketId={openTicketId}
+              onOpenTicketHandled={onOpenTicketHandled}
+              openReplyBody={openReplyBody}
+              onOpenReplyBodyHandled={onOpenReplyBodyHandled}
+            />
           )}
 
-          {!loading && msConnected && !selectedTicket && (
-            <>
-              {/* Toolbar */}
-              <div className="flex flex-col gap-3 mb-5">
-                <div className="flex items-center justify-between">
-                  <div className="flex gap-1.5 items-center flex-wrap">
-                    {(['open', 'needs attention', 'archived', 'resolved', 'spam'] as const).map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => { setStatusFilter(s); setSelectedIds(new Set()) }}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-lg capitalize transition-colors
-                          ${statusFilter === s
-                            ? 'bg-terracotta-500 text-white'
-                            : 'bg-white border border-sand-300 text-charcoal-500 hover:bg-sand-100'
-                          }`}
-                      >
-                        {s} {counts[s] > 0 && <span className="ml-1 opacity-70">({counts[s]})</span>}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <HideAllEmailsButton allHidden={allEmailsHidden} onClick={toggleAllEmails} />
-                    <button
-                      onClick={sync}
-                      disabled={syncing}
-                      className="flex items-center gap-2 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-terracotta-100 disabled:opacity-50"
-                    >
-                      <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
-                      {syncing ? 'Syncing…' : 'Sync inbox'}
-                    </button>
-                  </div>
-                </div>
-
-                {selectedIds.size > 0 && (
-                  <div className="flex items-center gap-2 px-4 py-2.5 bg-terracotta-50 border border-terracotta-200 rounded-xl flex-wrap">
-                    <span className="text-xs font-semibold text-terracotta-700 mr-1">
-                      {selectedIds.size} selected — move to:
-                    </span>
-                    {(['open', 'needs attention', 'archived', 'resolved', 'spam'] as const)
-                      .filter((s) => s !== statusFilter && s !== 'spam')
-                      .map((s) => (
-                        <button
-                          key={s}
-                          onClick={() => bulkChangeStatus(s)}
-                          disabled={bulkMoving || bulkDeleting}
-                          className="px-3 py-1 text-xs font-medium rounded-lg capitalize border border-sand-300 bg-white text-charcoal-600 hover:bg-sand-100 transition-colors disabled:opacity-50"
-                        >
-                          {bulkMoving ? <Loader2 size={10} className="animate-spin inline mr-1" /> : null}
-                          {s}
-                        </button>
-                      ))}
-                    {statusFilter !== 'spam' && (
-                      <button
-                        onClick={() => bulkChangeStatus('spam')}
-                        disabled={bulkMoving || bulkDeleting}
-                        className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors disabled:opacity-50"
-                      >
-                        {bulkMoving ? <Loader2 size={10} className="animate-spin" /> : <Ban size={10} />}
-                        Mark as spam
-                      </button>
-                    )}
-                    <div className="ml-auto">
-                      <button
-                        onClick={bulkDelete}
-                        disabled={bulkDeleting || bulkMoving}
-                        className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors disabled:opacity-50"
-                      >
-                        {bulkDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search by email address or message content…"
-                  className="w-full text-sm border border-sand-300 rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-terracotta-200 focus:border-terracotta-400 transition-all placeholder:text-charcoal-300 bg-white"
-                />
-              </div>
-
-              {/* Ticket list */}
-              {filtered.length === 0 ? (
-                <div className="text-center py-16 bg-white rounded-2xl shadow-card text-charcoal-400">
-                  <Inbox size={28} className="mx-auto mb-3 opacity-50" />
-                  <p className="font-medium">{q ? 'No matching tickets' : 'No tickets'}</p>
-                  <p className="text-sm mt-1">{q ? 'Try a different search term.' : 'Click "Sync inbox" to pull in new emails.'}</p>
-                </div>
-              ) : (
-                <div className="bg-white rounded-2xl shadow-card overflow-hidden">
-                  <div className="overflow-x-auto">
-                  <table className="w-full table-fixed text-sm">
-                    <thead>
-                      <tr className="bg-sand-100 text-left">
-                        <th className="pl-5 pr-2 py-3 w-10">
-                          <input
-                            type="checkbox"
-                            checked={allSelected}
-                            onChange={toggleAll}
-                            className="rounded border-sand-400 text-terracotta-500 focus:ring-terracotta-300 cursor-pointer"
-                          />
-                        </th>
-                        <SortableTh label="From" sortKeyValue="from" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[22%]" />
-                        <SortableTh label="Subject" sortKeyValue="subject" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[26%]" />
-                        <SortableTh label="Date" sortKeyValue="date" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[16%]" />
-                        <SortableTh label="Status" sortKeyValue="status" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[12%]" />
-                        <SortableTh label="Stage" sortKeyValue="stage" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[12%]" />
-                        <SortableTh label="Tags" sortKeyValue="tags" activeKey={sortKey} dir={sortDir} onSort={handleSort} widthClass="w-[12%]" />
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-sand-200">
-                      {filtered.map((t) => {
-                        const custTag = customerTagByEmail.get(t.from.toLowerCase())
-                        return (
-                        <tr
-                          key={t.id}
-                          onClick={() => setSelectedTicket(t)}
-                          className={`hover:bg-cream-100 cursor-pointer transition-colors ${selectedIds.has(t.id) ? 'bg-terracotta-50' : ''}`}
-                        >
-                          <td className="pl-5 pr-2 py-4" onClick={(e) => toggleOne(t.id, e)}>
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(t.id)}
-                              onChange={() => {}}
-                              className="rounded border-sand-400 text-terracotta-500 focus:ring-terracotta-300 cursor-pointer"
-                            />
-                          </td>
-                          <td className="px-4 py-4 min-w-0" onClick={(e) => e.stopPropagation()}>
-                            <p className="font-medium text-charcoal-700 flex items-center gap-1.5 min-w-0">
-                              <span className="truncate">{t.fromName}</span>
-                              {isLikelySpamSender(t.from) && (
-                                <span title="Possible spam sender">
-                                  <ShieldAlert size={13} className="text-red-500 shrink-0" />
-                                </span>
-                              )}
-                              {isLikelySpamSender(t.from) && t.status !== 'spam' && (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); quickMarkSpam(t.id) }}
-                                  title="Mark as spam"
-                                  className="text-red-400 hover:text-red-600 transition-colors shrink-0"
-                                >
-                                  <Ban size={13} />
-                                </button>
-                              )}
-                            </p>
-                            <p className="text-xs text-charcoal-400 mt-0.5 truncate">
-                              <MaskedEmail
-                                email={t.from}
-                                hidden={hiddenEmails.has(t.from.toLowerCase())}
-                                onToggle={() => toggleEmailVisibility(t.from)}
-                              />
-                            </p>
-                          </td>
-                          <td className="px-4 py-4 text-charcoal-600 truncate">{t.subject}</td>
-                          <td className="px-4 py-4 text-charcoal-400 truncate">{fmtDate(t.receivedAt)}</td>
-                          <td className="px-4 py-4">
-                            <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium capitalize ${STATUS_STYLES[t.status]}`}>
-                              {t.status}
-                            </span>
-                          </td>
-                          <td className="px-4 py-4">
-                            {custTag ? <TagBadge tag={custTag} /> : <span className="text-xs text-charcoal-300">—</span>}
-                          </td>
-                          <td className="px-4 py-4">
-                            <div className="flex flex-wrap gap-1">
-                              {t.tags.length > 0
-                                ? t.tags.map((tag) => (
-                                    <span key={tag} className="px-2 py-0.5 rounded-full text-xs bg-sand-100 text-charcoal-500 border border-sand-200 capitalize">
-                                      {tag}
-                                    </span>
-                                  ))
-                                : <span className="text-xs text-charcoal-300">—</span>}
-                            </div>
-                          </td>
-                        </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                  </div>
-                </div>
-              )}
-            </>
+          {!loading && tab === 'instagram' && (
+            <TicketsPane
+              channel="instagram"
+              allTickets={tickets}
+              setTickets={setTickets}
+              macros={macros}
+              customTags={customTags}
+              setCustomTags={setCustomTags}
+              hiddenTags={hiddenTags}
+              customers={customers}
+              customerTagByEmail={customerTagByEmail}
+              connected={igConnected}
+              connectHref="/api/instagram/auth"
+              ConnectIcon={Instagram}
+              connectTitle="Connect your Instagram account"
+              connectDescription="Sign in once to start syncing DMs from your linked Instagram account"
+              connectButtonLabel="Connect Instagram"
+              itemLabel="contact info"
+              syncing={syncingInstagram}
+              onSync={syncInstagram}
+              syncIdleLabel="Sync DMs"
+              emptyHint='Click "Sync DMs" to pull in new messages.'
+            />
           )}
-
-          {!loading && msConnected && selectedTicket && (() => {
-            const idx = filtered.findIndex((t) => t.id === selectedTicket.id)
-            return (
-              <TicketDetail
-                key={selectedTicket.id}
-                ticket={selectedTicket}
-                macros={macros}
-                customTags={customTags}
-                hiddenTags={hiddenTags}
-                hasPrev={idx > 0}
-                hasNext={idx < filtered.length - 1}
-                onPrev={() => setSelectedTicket(filtered[idx - 1])}
-                onNext={() => setSelectedTicket(filtered[idx + 1])}
-                onBack={() => { setSelectedTicket(null); setPendingReplyBody(null) }}
-                initialReplyBody={pendingReplyBody?.ticketId === selectedTicket.id ? pendingReplyBody.body : undefined}
-                onTagCreated={(tag) => setCustomTags((prev) => prev.includes(tag) ? prev : [...prev, tag])}
-                onNavigateToCustomer={onNavigateToCustomer}
-                emailHidden={hiddenEmails.has(selectedTicket.from.toLowerCase())}
-                onToggleEmail={() => toggleEmailVisibility(selectedTicket.from)}
-                customerTag={customerTagByEmail.get(selectedTicket.from.toLowerCase())}
-                customers={customers}
-                onUpdated={(updated) => {
-                  setTickets((prev) => prev.map((t) => t.id === updated.id ? updated : t))
-                  setSelectedTicket(updated)
-                }}
-                onDeleted={(id) => {
-                  setTickets((prev) => prev.filter((t) => t.id !== id))
-                  setSelectedTicket(null)
-                }}
-              />
-            )
-          })()}
         </>
       )}
     </section>

@@ -26,7 +26,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   const ticket = all.find((t) => t.id === params.id)
 
   // Best-effort: delete from Outlook (moves to Deleted Items). Don't block local delete if it fails.
-  if (ticket?.messageId) {
+  // Instagram's Graph API has no equivalent delete endpoint, so those tickets are local-only.
+  if (ticket?.channel !== 'instagram' && ticket?.messageId) {
     try { await deleteMessage(ticket.messageId) } catch { /* ignore */ }
   }
 

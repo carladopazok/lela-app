@@ -14,7 +14,7 @@ If the site stops responding: `pkill -f "next dev"` then `npm run dev` again.
 
 - Next.js 14 App Router, TypeScript, Tailwind CSS 3
 - Shopify Admin REST API v2024-10
-- Omnisend (email marketing), Microsoft Graph (Outlook CS inbox), Ollama cloud API (CS "Draft with AI")
+- Omnisend (email marketing), Microsoft Graph (Outlook CS inbox), Instagram Graph API (Instagram DM CS inbox), Ollama cloud API (CS "Draft with AI")
 - No database — JSON files in `data/` for local persistence
 
 ## Auth
@@ -43,6 +43,29 @@ All routes: import `getSession` from `@/lib/session`, `createShopifyClient` from
 
 Standing preferences live in the "Agent" tab of Customer Service (`AgentGuidancePanel` in `CustomerService.tsx`) — agent name, tone of voice, a standard closing message, and a list of titled guidance notes (e.g. "Refunds over €100"), stored as one JSON object via `GET`/`PUT /api/cs/agent-guidance` (`readAgentGuidance()`/`writeAgentGuidance()` in `cs-storage.ts`). Tone of voice and the notes are read server-side into every `ai-draft` call and injected into the prompt as "standing instructions", separate from the one-off per-draft `guidance` (regenerate box), which is layered on top for that draft only. Agent name and the standard message are *not* left to the model — `appendSignature()` in `ollama.ts` appends them deterministically after the model responds (`draft + "\n\n— {agentName}\n\n{standardMessage}"`), since a signature that must appear on every reply can't depend on whether the model remembers to include it; the prompt separately tells the model not to invent its own sign-off, so there's no duplicate. Saving guidance doesn't trigger anything — it only changes what future "Draft with AI" clicks send.
 
+### Instagram DM (Customer Service)
+A second "Instagram" tab in `CustomerService.tsx`, alongside the email "Tickets" tab, sharing the same `CSTicket`/`CSMessage` types (discriminated by `channel: 'email' | 'instagram'`) and the same Tags/Macros/Agent tabs. Both tabs render through the shared `TicketsPane` component, parametrized by channel — not a sidebar submenu, since the sidebar has no submenu precedent anywhere in this app.
+
+Uses Meta's **"Instagram API with Instagram Login"** product — confirmed against this app's actual Meta dashboard ("Welcome to Instagram API" onboarding, with its own Instagram App ID/Secret and a "Generate access tokens" test tool). This is a standalone flow with **no Facebook Page or Facebook Login involved at all** — do not confuse it with the older Facebook-Login/Pages-based "Instagram Graph API" that most third-party tutorials (and Meta's own older docs pages) describe; that flow uses different hosts, scopes, and a Page-token indirection this integration doesn't need. Confirmed empirically with a real test token from the dashboard's "Generate access tokens" tool: `GET graph.instagram.com/{ig_user_id}/conversations` works directly with no Page in the picture, auth'd via `Authorization: Bearer` header (not query-param `access_token`).
+- Authorize: `www.instagram.com/oauth/authorize` — **not** `facebook.com`
+- Scopes: `instagram_business_basic`, `instagram_business_manage_messages` — the old `instagram_basic`/`instagram_manage_messages`/`pages_*` names were deprecated Jan 2025
+- Code → short-lived token: `POST api.instagram.com/oauth/access_token` (form-encoded), returns `{access_token, user_id}` — `user_id` is used directly as `ig_user_id`, no Page/Business Account lookup needed
+- Long-lived exchange: `GET graph.instagram.com/access_token` (`grant_type=ig_exchange_token`)
+- Refresh: `GET graph.instagram.com/refresh_access_token` (`grant_type=ig_refresh_token`) — a dedicated refresh endpoint, unlike the exchange-only pattern the first version of this integration guessed at
+- The app's redirect URI is registered on the **Instagram API product's own setup page** in the Meta dashboard (not Facebook Login → Valid OAuth Redirect URIs, which doesn't apply to this product)
+
+Manual "Sync DMs" button only (`POST /api/cs/instagram/sync`) — no webhooks, no cron, same philosophy as the existing Outlook "Sync inbox" button, so no public HTTPS endpoint is required for local dev. (Meta's own docs page for this product's messaging API only documents Send + webhooks, not a polling endpoint — but polling `/{ig_user_id}/conversations` was verified working directly against a real token, so it's used anyway.)
+
+Unlike Outlook (one new message = one new ticket), Instagram DMs are conversations, so sync is one-ticket-per-conversation: `messageId` on an Instagram `CSTicket` holds the IG **conversation id**, not a message id, and repeat syncs merge new messages into the existing `thread`. To dedup correctly (including not re-adding our own replies as spurious inbound messages), `CSMessage.id` for Instagram messages is the real IG message id in both directions, not `randomUUID()` — see `src/app/api/cs/instagram/sync/route.ts`. Note: the `participants`/`from`/`to` field shapes used to identify the customer vs. the connected account are per Graph API convention but have not yet been verified against a real conversation with actual messages (the test account had zero DMs) — worth double-checking the first time a real DM comes through.
+
+Token lifecycle in `src/lib/instagram-graph.ts` (`data/instagram-tokens.json`, `{access_token, ig_user_id, expires_at}`) refreshes proactively when within ~7 days of the stored `expires_at`, via the dedicated `ig_refresh_token` grant above (not a generic OAuth `refresh_token` grant like `ms-graph.ts` uses).
+
+Replies are subject to Meta's 24-hour messaging window — attempting to reply outside it is caught in `sendMessage()` and surfaced as an explicit error in the reply route/UI (no silent failure, matching the "no mock/fallback" convention used elsewhere in this app).
+
+Known limitation: Instagram gives no email address, so the customer-context lookup in `draftWithAI()` (matches by email) always misses for Instagram tickets — the AI draft still works, just without order-history context. "View customer profile" is disabled for the same reason.
+
+**Current status: code-complete but not yet connected.** `/api/instagram/status` (shown on the Integrations tab, `src/components/sections/Integrations.tsx`) reports `hasIGAuth()` — false until the one-time OAuth "Connect" step completes. That step is blocked locally: Meta's Instagram Login requires an HTTPS redirect URI, and local dev only serves plain HTTP. The OAuth flow, scopes, and messaging calls have all been verified working against the real Meta app (including a live test of `graph.instagram.com` conversations with a real token) — what's missing is just an HTTPS-capable environment (a deployment, or a stable local tunnel) to click through the connect step once.
+
 ### Data storage (JSON files — no DB)
 | File | Owned by | Contents |
 |---|---|---|
@@ -55,6 +78,7 @@ Standing preferences live in the "Agent" tab of Customer Service (`AgentGuidance
 | `data/macros.json` | `src/lib/cs-storage.ts` | CS macro array |
 | `data/agent-guidance.json` | `src/lib/cs-storage.ts` | `{ agentName, toneOfVoice, standardMessage, notes: [{ id, title, body, createdAt, updatedAt? }] }` — standing instructions for "Draft with AI" |
 | `data/ms-tokens.json` | `src/lib/ms-graph.ts` | Microsoft OAuth tokens |
+| `data/instagram-tokens.json` | `src/lib/instagram-graph.ts` | `{ access_token, page_id, ig_user_id, expires_at }` — Meta OAuth tokens |
 
 ## Design System
 
@@ -77,7 +101,7 @@ Section header: `text-xs font-semibold uppercase tracking-widest text-charcoal-4
 - `EnrichedCustomer` — `ShopifyCustomer` + `{ aov, lastOrderDate, computedTags, manualTags, productTags }`
 - `ScoredCustomer` — `EnrichedCustomer` + `{ rfm: { r, f, m }, segment }` (from `src/lib/rfm.ts`)
 - `CUSTOMER_TAGS` — `['VIP', 'loyal', 'active', '1-order', 'winback', 'at-risk', 'lapsed', 'lost', 'never-purchased', 'abandoned-checkout']`, computed by the shared classifier in `src/lib/segmentation.ts` (see its changelog comment for thresholds)
-- `CSTicket`, `CSMacro`, `CSMessage`, `AgentGuidance`, `AgentGuidanceNote` — customer service entities
+- `CSTicket`, `CSMacro`, `CSMessage`, `AgentGuidance`, `AgentGuidanceNote` — customer service entities; `CSTicket.channel: 'email' | 'instagram'` discriminates Outlook vs Instagram DM tickets
 - `ShopifyOrder` includes `line_items: ShopifyLineItem[]`; `product_type` on line items is often empty — use `data/product-categories.json` as fallback
 
 ## Reusable UI

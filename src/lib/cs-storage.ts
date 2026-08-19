@@ -16,7 +16,9 @@ function ensureDataDir() {
 export function readTickets(): CSTicket[] {
   try {
     if (!existsSync(TICKETS_FILE)) return []
-    return JSON.parse(readFileSync(TICKETS_FILE, 'utf-8')) as CSTicket[]
+    const tickets = JSON.parse(readFileSync(TICKETS_FILE, 'utf-8')) as CSTicket[]
+    // Tickets written before the `channel` field existed default to 'email' — no migration needed.
+    return tickets.map((t) => ({ ...t, channel: t.channel ?? 'email' }))
   } catch {
     return []
   }

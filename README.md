@@ -8,7 +8,7 @@ A personal ecommerce operations dashboard for [carladopazo.com](https://carladop
 - **Late Shipments** — unfulfilled orders older than 3 days
 - **Email Performance** — recent Omnisend campaign stats
 - **Customer Intelligence** — customer list with automatic tagging (VIP, 1-order, never-purchased, winback), synced to Shopify and Omnisend
-- **Customer Service** — Outlook inbox integration (via Microsoft Graph API) with tickets and reusable macros
+- **Customer Service** — Outlook inbox integration (via Microsoft Graph API) and Instagram DM integration (via Instagram Graph API), with tickets and reusable macros
 - **Integrations** — connection-status check for Odoo (auth only, no data sync yet)
 - **About This Tool** — overview page for the dashboard itself
 
@@ -37,15 +37,18 @@ Copy `.env.local.example` to `.env.local` and fill in:
 | `OMNISEND_API_KEY` | Omnisend API key for email performance data |
 | `MS_CLIENT_ID` / `MS_CLIENT_SECRET` / `MS_TENANT_ID` | Azure app registration credentials for Microsoft Graph (Outlook integration) |
 | `OUTLOOK_EMAIL` | Mailbox address used for the Customer Service inbox |
+| `IG_APP_ID` / `IG_APP_SECRET` | Meta App credentials for the Instagram Graph API (Instagram DM integration) |
 | `ODOO_URL` / `ODOO_DB` / `ODOO_USERNAME` / `ODOO_API_KEY` | Odoo instance credentials for the Integrations tab's connection-status check |
 
 Shopify auth uses Partner app OAuth by default. Setting `SHOPIFY_ACCESS_TOKEN` skips the OAuth flow.
 
 The Outlook integration for Customer Service requires a separate Azure app registration (Microsoft Graph API, `Mail.ReadWrite` / `Mail.Send` / `offline_access` scopes). `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, and `MS_TENANT_ID` come from that registration.
 
+The Instagram integration for Customer Service uses Meta's "Instagram API with Instagram Login" product — a standalone flow tied directly to an Instagram Professional (Business/Creator) account, with **no Facebook Page or Facebook Login involved**. `IG_APP_ID` and `IG_APP_SECRET` come from that product's own setup page in the Meta dashboard (shown as "Instagram App ID"/"Instagram App Secret" there — a different pair of values from the app's general Settings → Basic App ID, if the app has one). `{APP_URL}/api/instagram/auth/callback` must be registered as a redirect URI on that same Instagram API setup page, requesting the `instagram_business_basic` and `instagram_business_manage_messages` scopes. See `CLAUDE.md` for the exact endpoints, the sync model, and known limitations.
+
 The Odoo integration on the Integrations tab is a connection check only — it authenticates against Odoo's JSON-RPC API (`authenticate` on the `common` service) and reports whether the credentials work. It does not sync or display any Odoo data yet.
 
-Note: `.env.local.example` is currently missing the `SHOPIFY_ACCESS_TOKEN`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_TENANT_ID`, and `OUTLOOK_EMAIL` entries — add them there too if you want the example file to stay a complete template.
+Note: `.env.local.example` is currently missing the `SHOPIFY_ACCESS_TOKEN`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_TENANT_ID`, and `OUTLOOK_EMAIL` entries — add them there too if you want the example file to stay a complete template. (`IG_APP_ID` / `IG_APP_SECRET` are already in the example file.)
 
 ## Scripts
 

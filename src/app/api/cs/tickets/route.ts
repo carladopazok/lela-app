@@ -3,6 +3,7 @@ import { getSession } from '@/lib/session'
 import { readTickets, writeTickets } from '@/lib/cs-storage'
 import { readDummyTickets } from '@/lib/dummy-data'
 import { hasMSAuth } from '@/lib/ms-graph'
+import { hasIGAuth } from '@/lib/instagram-graph'
 import { randomUUID } from 'crypto'
 import type { CSTicket, TicketTag } from '@/types'
 
@@ -12,7 +13,7 @@ export async function GET(req: NextRequest) {
   if (req.nextUrl.searchParams.get('dummy') === '1') {
     tickets.push(...readDummyTickets())
   }
-  return NextResponse.json({ tickets, msConnected: hasMSAuth() })
+  return NextResponse.json({ tickets, msConnected: hasMSAuth(), igConnected: hasIGAuth() })
 }
 
 // Creates a ticket not backed by a real inbound Outlook message (messageId: ''). The reply
@@ -29,6 +30,7 @@ export async function POST(req: NextRequest) {
 
   const ticket: CSTicket = {
     id: randomUUID(),
+    channel: 'email',
     subject: subject.trim(),
     from: from.trim(),
     fromName: fromName?.trim() || from.trim(),

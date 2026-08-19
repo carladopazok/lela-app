@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
 
   const ticket: CSTicket = {
     id: randomUUID(),
+    channel: 'email',
     subject: `Order ${orderName} — Shipping Delay`,
     from: customerEmail,
     fromName: customerName || customerEmail,

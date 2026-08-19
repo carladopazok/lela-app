@@ -171,11 +171,15 @@ export interface SalesMetrics {
 // ─── Customer Service ───────────────────────────────────────────────────────
 
 export type TicketStatus = 'open' | 'needs attention' | 'archived' | 'resolved' | 'spam'
+export type TicketChannel = 'email' | 'instagram'
 
 export const TICKET_TAGS = ['order issue', 'refund', 'shipping', 'product question', 'general', 'marketing messages'] as const
 export type TicketTag = string
 
 export interface CSMessage {
+  // Email: randomUUID() locally. Instagram: the real IG message id (both directions) — needed
+  // so resyncing a conversation can dedup against messages we already recorded, including our
+  // own replies, without re-adding them as spurious inbound messages.
   id: string
   direction: 'inbound' | 'outbound' | 'note'
   body: string
@@ -185,10 +189,13 @@ export interface CSMessage {
 
 export interface CSTicket {
   id: string
+  channel: TicketChannel
   subject: string
   from: string
   fromName: string
   receivedAt: string
+  // Email: the Outlook message id ('' for manually-created tickets). Instagram: the IG
+  // conversation id (Instagram tickets are one-per-conversation, not one-per-message).
   messageId: string
   status: TicketStatus
   tags: TicketTag[]

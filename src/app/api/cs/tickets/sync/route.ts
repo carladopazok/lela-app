@@ -50,6 +50,7 @@ export async function POST() {
 
       const ticket: CSTicket = {
         id: randomUUID(),
+        channel: 'email',
         subject: msg.subject ?? '(no subject)',
         from: fromAddr,
         fromName,

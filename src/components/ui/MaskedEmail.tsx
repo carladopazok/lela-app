@@ -8,12 +8,14 @@ export default function MaskedEmail({
   onToggle,
   mailto = false,
   className = '',
+  itemLabel = 'email',
 }: {
   email: string
   hidden: boolean
   onToggle: (e: React.MouseEvent) => void
   mailto?: boolean
   className?: string
+  itemLabel?: string
 }) {
   return (
     <span className={`inline-flex items-center gap-1.5 ${className}`}>
@@ -27,7 +29,7 @@ export default function MaskedEmail({
       <button
         onClick={onToggle}
         className="text-charcoal-300 hover:text-terracotta-500 transition-colors shrink-0"
-        title={hidden ? 'Show email' : 'Hide email'}
+        title={hidden ? `Show ${itemLabel}` : `Hide ${itemLabel}`}
       >
         {hidden ? <EyeOff size={11} /> : <Eye size={11} />}
       </button>
@@ -35,14 +37,14 @@ export default function MaskedEmail({
   )
 }
 
-export function HideAllEmailsButton({ allHidden, onClick }: { allHidden: boolean; onClick: () => void }) {
+export function HideAllEmailsButton({ allHidden, onClick, itemLabel = 'emails' }: { allHidden: boolean; onClick: () => void; itemLabel?: string }) {
   return (
     <button
       onClick={onClick}
       className="flex items-center gap-1.5 text-xs text-charcoal-400 hover:text-terracotta-500 transition-colors"
     >
       {allHidden ? <EyeOff size={12} /> : <Eye size={12} />}
-      {allHidden ? 'Show all emails' : 'Hide all emails'}
+      {allHidden ? `Show all ${itemLabel}` : `Hide all ${itemLabel}`}
     </button>
   )
 }
