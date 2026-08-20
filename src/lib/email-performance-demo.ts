@@ -90,11 +90,11 @@ export const DEMO_FLOWS: DemoFlow[] = [
     ],
   },
   {
-    id: 'winback-day-60',
-    name: 'Winback day 60',
+    id: 'winback-day-70',
+    name: 'Winback day 70',
     stage: 'Winback',
     emails: [
-      { name: "We miss you — 15% back (day 60)", entered: 890, opened: 285, clicked: 42, converted: 9, revenue: 225 },
+      { name: "We miss you — 15% back (day 70)", entered: 890, opened: 285, clicked: 42, converted: 9, revenue: 225 },
     ],
   },
   {
@@ -105,7 +105,7 @@ export const DEMO_FLOWS: DemoFlow[] = [
       { name: 'Last call before we let go (day 75)', entered: 860, opened: 189, clicked: 31, converted: 7, revenue: 175 },
     ],
     diagnosticNote:
-      "Open rate is 22% — down from 32% on the day-60 email, a steeper step-down than any other flow pair. This email alone underperforms Welcome series' first email by roughly half.",
+      "Open rate is 22% — down from 32% on the day-70 email, a steeper step-down than any other flow pair. This email alone underperforms Welcome series' first email by roughly half.",
   },
   {
     id: 'community-invite',
@@ -305,7 +305,7 @@ const HEALTHY_STAGES: LifecycleStage[] = ['New', 'Active', 'Loyal', 'VIP']
 // targets that stage — an honest gap, not filled in with a fake match. Kept
 // deliberately small: only the stages the demo flows above actually target.
 const STAGE_RECOVERY_FLOW_MAP: Partial<Record<LifecycleStage, string | null>> = {
-  Winback: 'Winback day 60',
+  Winback: 'Winback day 70',
   Lapsed: 'Reactivation sequence',
   'At Risk': null, // journey.ts's `re-engagement-nudge` automation exists but is inactive
   Lost: null,
@@ -339,8 +339,8 @@ export const ILLUSTRATIVE_ATTRIBUTION_EXAMPLES: StageFlowAttributionExample[] = 
     oldStage: 'Winback',
     newStage: 'Active',
     changedAtLabel: '2026-06-14',
-    matchedFlow: 'Winback day 60',
-    note: 'Placed a second order 9 days after the day-60 email; the day-75 follow-up never went out.',
+    matchedFlow: 'Winback day 70',
+    note: 'Placed a second order 9 days after the day-70 email; the day-75 follow-up never went out.',
   },
   {
     customerLabel: 'Customer B',

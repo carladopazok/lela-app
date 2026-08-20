@@ -69,7 +69,7 @@ export const PENDING_WORK: PendingWorkItem[] = [
     title: 'Build the actual automations in Omnisend',
     area: 'Omnisend Integration',
     status: 'todo',
-    summary: 'Confirmed via Omnisend’s own "Marketing activity performance" report that Automation revenue is tracked separately from Campaign revenue — but it currently shows €0.00 because no automations exist in the account yet. Every flow on the Journey board (Welcome series, Winback day 60, etc.) is a curated, aspirational checklist, not a live Omnisend automation. This blocks the two items below — there’s nothing real to attribute revenue to or map an ID from until automations actually exist.',
+    summary: 'Confirmed via Omnisend’s own "Marketing activity performance" report that Automation revenue is tracked separately from Campaign revenue — but it currently shows €0.00 because no automations exist in the account yet. Every flow on the Journey board (Welcome series, Winback day 70, etc.) is a curated, aspirational checklist, not a live Omnisend automation. This blocks the two items below — there’s nothing real to attribute revenue to or map an ID from until automations actually exist.',
     instructions: [
       'In Omnisend, build the automations you actually want live. JOURNEY_AUTOMATIONS in src/lib/journey.ts is a reasonable build order — it’s already organized by lifecycle stage, and each card marked active: true is one you likely want built first.',
       'As each one goes live in Omnisend, update its active: true/false in journey.ts to match reality, and note its real Omnisend automation ID for the mapping item below.',

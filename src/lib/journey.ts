@@ -14,8 +14,14 @@ import {
 // thresholds, same source of truth as the Customers tab (src/lib/segmentation.ts).
 export type JourneyStage = 'Pre-Purchase' | 'Lead' | Exclude<LifecycleStage, 'Never Purchased'>
 
+// Pre-Purchase is deliberately absent here — it's rendered as a note/card below
+// the main flow (CustomerJourney.tsx), not a column in it, since it's a
+// transactional trigger that can fire at any point in the journey rather than a
+// stage a customer occupies. It stays a valid JourneyStage (see JOURNEY_STAGE_META,
+// JOURNEY_AUTOMATIONS, STAGE_TRANSITION_RULES, computeJourneyCounts below) — only
+// this ordering array, which drives the two-row stage flow, excludes it.
 export const JOURNEY_STAGE_ORDER: JourneyStage[] = [
-  'Pre-Purchase', 'Lead', 'New', 'Active', 'Winback', 'Loyal', 'VIP', 'At Risk', 'Lapsed', 'Lost',
+  'Lead', 'New', 'Active', 'Loyal', 'VIP', 'Winback', 'At Risk', 'Lapsed', 'Lost',
 ]
 
 export const JOURNEY_STAGE_META: Record<JourneyStage, { bg: string; text: string; border: string }> = {
@@ -70,7 +76,7 @@ export const JOURNEY_AUTOMATIONS: JourneyAutomation[] = [
   { id: 'back-in-stock-active',  stage: 'Active',   name: 'Back-in-Stock Alert',     description: 'Notifies a customer when a product they wanted is restocked', active: false, channel: 'Email' },
   { id: 'price-drop-active',     stage: 'Active',   name: 'Price Drop Alert',        description: 'Notifies a customer when a product they viewed drops in price', active: false, channel: 'Email' },
 
-  { id: 'winback-day-60',        stage: 'Winback',  name: 'Winback day 60',          description: 'First win-back email, sent 60 days after a customer’s only order', active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.95 } },
+  { id: 'winback-day-70',        stage: 'Winback',  name: 'Winback day 70',          description: 'First win-back email, sent 70 days after a customer’s last order', active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.95 } },
   { id: 'winback-day-75',        stage: 'Winback',  name: 'Winback day 75',          description: 'Follow-up win-back with a stronger incentive at day 75',    active: true,  channel: 'Email', performance: { revenuePerRecipient: 1.35 } },
 
   { id: 'vip-upgrade-prompt',    stage: 'Loyal',    name: 'VIP upgrade prompt',      description: 'Highlights VIP perks to push toward the next tier',         active: false, channel: 'Email' },
@@ -134,7 +140,7 @@ export const JOURNEY_AUTOMATION_OMNISEND_NAMES: Partial<Record<string, string>> 
 // sync with the real thresholds; 'Pre-Purchase'/'Lead' get their own text since
 // they're Journey-only funnel concepts, not LifecycleStage values.
 export const STAGE_TRANSITION_RULES: Record<JourneyStage, string> = {
-  'Pre-Purchase': 'Added to cart or browsed, but no completed order yet',
+  'Pre-Purchase': 'Added to cart or browsed, but no completed order yet — can happen at any point in the journey, independent of lifecycle stage',
   Lead: 'Known Omnisend contact with zero completed Shopify orders',
   New: LIFECYCLE_STAGE_TRANSITION_RULES.New,
   Active: LIFECYCLE_STAGE_TRANSITION_RULES.Active,

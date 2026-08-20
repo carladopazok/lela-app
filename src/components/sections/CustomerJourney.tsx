@@ -6,9 +6,9 @@ import {
   AlertTriangle, Info, Star, Mail, MessageSquare, RefreshCw,
 } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
+import CollapsibleCard from '@/components/ui/CollapsibleCard'
 import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import {
-  JOURNEY_STAGE_ORDER,
   JOURNEY_STAGE_META,
   JOURNEY_AUTOMATIONS,
   LEAD_SOURCE_BREAKDOWN,
@@ -24,7 +24,7 @@ import {
   type JourneyAutomation,
 } from '@/lib/journey'
 import type { AutomationSummary } from '@/app/api/omnisend/automations/route'
-import { LIFECYCLE_STAGE_META, type LifecycleStage } from '@/lib/segmentation'
+import { LIFECYCLE_STAGE_META, WINBACK_START_DAYS, type LifecycleStage } from '@/lib/segmentation'
 import { ILLUSTRATIVE_ATTRIBUTION_EXAMPLES } from '@/lib/email-performance-demo'
 import type { EnrichedCustomer } from '@/types'
 
@@ -348,6 +348,315 @@ function LeadListModal({ customers, onClose }: { customers: EnrichedCustomer[]; 
   )
 }
 
+// Fixed column/gap widths shared by every row and the connector band below, so
+// the growth spine (5 columns) and decay spine (4 columns, right-aligned under
+// New–VIP via a matching leading spacer) stay pixel-aligned without measuring
+// live DOM positions.
+const STAGE_COLUMN_WIDTH = 260
+const STAGE_GAP_WIDTH = 32
+
+// Growth spine (unchanged left-to-right progression by order count) and decay
+// spine (recency-driven, order-count-independent) — together these are
+// JOURNEY_STAGE_ORDER minus 'Pre-Purchase', which renders as a note below both
+// rows instead of a column (see the Pre-Purchase CollapsibleCard further down).
+const GROWTH_SPINE: JourneyStage[] = ['Lead', 'New', 'Active', 'Loyal', 'VIP']
+const DECAY_SPINE: JourneyStage[] = ['Winback', 'At Risk', 'Lapsed', 'Lost']
+
+// Horizontal center (px, from the row's left edge) of each of `count` equal-width
+// columns laid out left-to-right with the given width/gap — used to drop a
+// connector line precisely under a specific stage card without measuring the
+// live DOM. GROWTH_SPINE's own first column (Lead) is excluded by callers that
+// only care about the four order-count stages (New/Active/Loyal/VIP).
+function spineColumnCenters(count: number, columnWidth: number, gapWidth: number): number[] {
+  const step = columnWidth + gapWidth
+  return Array.from({ length: count }, (_, i) => i * step + columnWidth / 2)
+}
+
+function StageColumn({
+  stage,
+  count,
+  contactsLoading,
+  onShowLeadList,
+  expanded,
+  onToggleRule,
+  automations,
+  onCreateAutomation,
+  resolvedAutomationIds,
+}: {
+  stage: JourneyStage
+  count: number
+  contactsLoading: boolean
+  onShowLeadList: () => void
+  expanded: boolean
+  onToggleRule: () => void
+  automations: JourneyAutomation[]
+  onCreateAutomation: (automation: JourneyAutomation) => void
+  resolvedAutomationIds: Map<string, string>
+}) {
+  const meta = JOURNEY_STAGE_META[stage]
+  return (
+    <div style={{ width: STAGE_COLUMN_WIDTH }} className="flex-shrink-0">
+      <div className={`rounded-2xl border px-4 py-3 mb-3 ${meta.bg} ${meta.border}`}>
+        <div className="flex items-center justify-between gap-1">
+          <p className={`font-serif text-lg tracking-tight ${meta.text}`}>{stage}</p>
+          <button
+            onClick={onToggleRule}
+            title="Show transition rule"
+            className={`flex-shrink-0 p-0.5 rounded transition-colors ${meta.text} opacity-60 hover:opacity-100`}
+          >
+            <Info size={13} />
+          </button>
+        </div>
+        <p className="text-xs text-charcoal-500 mt-0.5 flex items-center gap-1">
+          {stage === 'Lead' && contactsLoading ? (
+            '…'
+          ) : stage === 'Lead' ? (
+            <button
+              onClick={onShowLeadList}
+              className="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-terracotta-600 transition-colors"
+            >
+              {count.toLocaleString()} customers · view list
+            </button>
+          ) : (
+            `${count.toLocaleString()} customers`
+          )}
+          {DIAGNOSTIC_STAGES.includes(stage) && count === 0 && (
+            <span title="0 customers — check segment trigger definitions" className="flex-shrink-0">
+              <AlertTriangle size={11} className="text-amber-600" />
+            </span>
+          )}
+        </p>
+        {expanded && (
+          <p className="text-[11px] text-charcoal-400 mt-2 leading-relaxed">
+            {STAGE_TRANSITION_RULES[stage]}
+          </p>
+        )}
+        {stage === 'Lead' && (
+          <p className="text-[11px] text-charcoal-400 mt-2 leading-relaxed">
+            <span className="italic">Illustrative sources — </span>
+            {LEAD_SOURCE_BREAKDOWN.map((s) => `${s.source} ${s.pct}%`).join(' · ')}
+          </p>
+        )}
+        {stage === 'Winback' && (
+          <p className="text-[11px] text-charcoal-400 mt-2 leading-relaxed italic">
+            Entered from New, Active, Loyal, or VIP after {WINBACK_START_DAYS}+ days without an order. Converts
+            → returns to whichever of those fits their refreshed order count and recency.
+          </p>
+        )}
+      </div>
+      <div className="flex flex-col gap-3">
+        {automations.map((automation) => (
+          <AutomationCard
+            key={automation.id}
+            automation={automation}
+            onCreate={onCreateAutomation}
+            realAutomationId={resolvedAutomationIds.get(automation.id)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// One row of the branching diagram — used for both the growth spine and the
+// decay spine. `leadingSpacer` reserves one column+gap of empty space so the
+// decay spine (4 columns) lines up under the New–VIP span of the growth spine
+// (also 4 columns), with Winback landing directly under the connector band's
+// arrow instead of under Lead.
+function StageRow({
+  stages,
+  leadingSpacer,
+  counts,
+  contactsLoading,
+  onShowLeadList,
+  expandedRules,
+  onToggleRule,
+  onCreateAutomation,
+  resolvedAutomationIds,
+}: {
+  stages: JourneyStage[]
+  leadingSpacer?: boolean
+  counts: Record<JourneyStage, number>
+  contactsLoading: boolean
+  onShowLeadList: () => void
+  expandedRules: Set<JourneyStage>
+  onToggleRule: (stage: JourneyStage) => void
+  onCreateAutomation: (automation: JourneyAutomation) => void
+  resolvedAutomationIds: Map<string, string>
+}) {
+  return (
+    <div className="flex items-start">
+      {leadingSpacer && (
+        <>
+          <div style={{ width: STAGE_COLUMN_WIDTH }} className="flex-shrink-0" />
+          <div style={{ width: STAGE_GAP_WIDTH }} className="flex-shrink-0" />
+        </>
+      )}
+      {stages.map((stage, i) => (
+        <Fragment key={stage}>
+          <StageColumn
+            stage={stage}
+            count={counts[stage]}
+            contactsLoading={contactsLoading}
+            onShowLeadList={onShowLeadList}
+            expanded={expandedRules.has(stage)}
+            onToggleRule={() => onToggleRule(stage)}
+            automations={JOURNEY_AUTOMATIONS.filter((a) => a.stage === stage)}
+            onCreateAutomation={onCreateAutomation}
+            resolvedAutomationIds={resolvedAutomationIds}
+          />
+          {i < stages.length - 1 && (
+            <div style={{ width: STAGE_GAP_WIDTH }} className="flex-shrink-0 flex items-center justify-center mt-10">
+              <ChevronRight size={18} className="text-sand-400" />
+            </div>
+          )}
+        </Fragment>
+      ))}
+    </div>
+  )
+}
+
+// Connects the growth spine to the decay spine: New/Active/Loyal/VIP can all
+// decay into Winback once a customer's gone WINBACK_START_DAYS+ without an
+// order. Drawn as a "rake" — one dashed stem dropping from each of those four
+// stage cards, merging into a single shared line, then one trunk down into
+// Winback — so it reads as "any of these four", not just a flat pipe between
+// rows. (Not drawn the other direction, Winback back up to one fixed stage,
+// since a converting Winback customer doesn't return to a single stage — see
+// the note on Winback's own card instead.)
+function DecayConnector() {
+  const centers = spineColumnCenters(GROWTH_SPINE.length, STAGE_COLUMN_WIDTH, STAGE_GAP_WIDTH).slice(1)
+  const spanLeft = centers[0]
+  const spanWidth = centers[centers.length - 1] - centers[0]
+  const trunkX = centers[0] // coincides with Winback's own center below, via the matching leadingSpacer on the decay row
+  const tickHeight = 18
+  const trunkHeight = 22
+
+  return (
+    <div>
+      <p
+        className="text-[11px] font-medium text-orange-600 text-center leading-snug"
+        style={{ marginLeft: spanLeft, width: spanWidth }}
+      >
+        Any of New, Active, Loyal, or VIP — {WINBACK_START_DAYS}+ days without a new order
+      </p>
+      <div className="relative" style={{ height: tickHeight + trunkHeight }}>
+        {centers.map((x) => (
+          <div key={x} className="absolute border-l-2 border-dashed border-orange-300" style={{ left: x, top: 0, height: tickHeight }} />
+        ))}
+        <div className="absolute border-t-2 border-dashed border-orange-300" style={{ left: spanLeft, width: spanWidth, top: tickHeight }} />
+        <div className="absolute border-l-2 border-dashed border-orange-300" style={{ left: trunkX, top: tickHeight, height: trunkHeight }} />
+        <ChevronRight
+          size={14}
+          className="absolute rotate-90 text-orange-400"
+          style={{ left: trunkX - 7, top: tickHeight + trunkHeight - 13 }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ─── Compact overview ───────────────────────────────────────────────────────
+// A small, non-interactive stage-flow diagram rendered above the detailed map
+// (which carries the full-size cards + automation stacks and can get dense
+// enough that the branching shape at Winback is hard to take in at a glance).
+// Mirrors the detailed map's two-spine shape at a much smaller size — same
+// GROWTH_SPINE/DECAY_SPINE order, same JOURNEY_STAGE_META colors — so the two
+// read as the same journey, just zoomed out.
+const MINI_PILL_WIDTH = 110
+const MINI_GAP_WIDTH = 16
+
+function MiniStagePill({ stage, count }: { stage: JourneyStage; count: number }) {
+  const meta = JOURNEY_STAGE_META[stage]
+  return (
+    <div
+      style={{ width: MINI_PILL_WIDTH }}
+      className={`flex-shrink-0 rounded-xl border px-3 py-2 ${meta.bg} ${meta.border}`}
+    >
+      <p className={`text-xs font-medium truncate ${meta.text}`}>{stage}</p>
+      <p className="text-[10px] text-charcoal-400">{count.toLocaleString()}</p>
+    </div>
+  )
+}
+
+function MiniStageRow({
+  stages,
+  leadingSpacer,
+  counts,
+}: {
+  stages: JourneyStage[]
+  leadingSpacer?: boolean
+  counts: Record<JourneyStage, number>
+}) {
+  return (
+    <div className="flex items-center">
+      {leadingSpacer && <div style={{ width: MINI_PILL_WIDTH + MINI_GAP_WIDTH }} className="flex-shrink-0" />}
+      {stages.map((stage, i) => (
+        <Fragment key={stage}>
+          <MiniStagePill stage={stage} count={counts[stage]} />
+          {i < stages.length - 1 && (
+            <div style={{ width: MINI_GAP_WIDTH }} className="flex-shrink-0 flex items-center justify-center">
+              <ChevronRight size={12} className="text-sand-400" />
+            </div>
+          )}
+        </Fragment>
+      ))}
+    </div>
+  )
+}
+
+// Same "rake" shape as DecayConnector, scaled to the mini pills — see that
+// component's comment for why it's drawn as four merging stems, not one line.
+function MiniDecayConnector() {
+  const centers = spineColumnCenters(GROWTH_SPINE.length, MINI_PILL_WIDTH, MINI_GAP_WIDTH).slice(1)
+  const spanLeft = centers[0]
+  const spanWidth = centers[centers.length - 1] - centers[0]
+  const trunkX = centers[0]
+  const tickHeight = 10
+  const trunkHeight = 14
+
+  return (
+    <div>
+      <p
+        className="text-[10px] font-medium text-orange-600 text-center leading-snug"
+        style={{ marginLeft: spanLeft, width: spanWidth }}
+      >
+        Any of these four — {WINBACK_START_DAYS}+ days without a new order
+      </p>
+      <div className="relative" style={{ height: tickHeight + trunkHeight }}>
+        {centers.map((x) => (
+          <div key={x} className="absolute border-l border-dashed border-orange-300" style={{ left: x, top: 0, height: tickHeight }} />
+        ))}
+        <div className="absolute border-t border-dashed border-orange-300" style={{ left: spanLeft, width: spanWidth, top: tickHeight }} />
+        <div className="absolute border-l border-dashed border-orange-300" style={{ left: trunkX, top: tickHeight, height: trunkHeight }} />
+        <ChevronRight
+          size={10}
+          className="absolute rotate-90 text-orange-400"
+          style={{ left: trunkX - 5, top: tickHeight + trunkHeight - 9 }}
+        />
+      </div>
+    </div>
+  )
+}
+
+function JourneyOverview({ counts }: { counts: Record<JourneyStage, number> }) {
+  return (
+    <div className="bg-white rounded-2xl shadow-card p-5 mb-3">
+      <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">Journey Overview</p>
+      <div className="overflow-x-auto">
+        <div className="min-w-max">
+          <MiniStageRow stages={GROWTH_SPINE} counts={counts} />
+          <MiniDecayConnector />
+          <MiniStageRow stages={DECAY_SPINE} leadingSpacer counts={counts} />
+        </div>
+      </div>
+      <p className="text-[11px] text-charcoal-400 mt-3">
+        Pre-Purchase flows (cart/browse abandonment) can trigger at any point in this journey — see the card below.
+      </p>
+    </div>
+  )
+}
+
 const ZOOM_MIN = 0.5
 const ZOOM_MAX = 1.5
 const ZOOM_STEP = 0.1
@@ -363,6 +672,7 @@ export default function CustomerJourney({
   const [contactsLoading, setContactsLoading] = useState(true)
   const [activeAutomation, setActiveAutomation] = useState<JourneyAutomation | null>(null)
   const [showLeadList, setShowLeadList] = useState(false)
+  const [prePurchaseOpen, setPrePurchaseOpen] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [expandedRules, setExpandedRules] = useState<Set<JourneyStage>>(new Set())
   const [syncing, setSyncing] = useState(false)
@@ -589,78 +899,54 @@ export default function CustomerJourney({
 
       <StageAttributionCard onNavigateToEmailAttribution={onNavigateToEmailAttribution} />
 
+      <JourneyOverview counts={counts} />
+
       <div className="overflow-x-auto pb-4">
-        <div className="flex items-start min-w-max" style={{ zoom }}>
-          {JOURNEY_STAGE_ORDER.map((stage, i) => {
-            const meta = JOURNEY_STAGE_META[stage]
-            const automations = JOURNEY_AUTOMATIONS.filter((a) => a.stage === stage)
-            return (
-              <Fragment key={stage}>
-                <div className="w-[260px] flex-shrink-0">
-                  <div className={`rounded-2xl border px-4 py-3 mb-3 ${meta.bg} ${meta.border}`}>
-                    <div className="flex items-center justify-between gap-1">
-                      <p className={`font-serif text-lg tracking-tight ${meta.text}`}>{stage}</p>
-                      <button
-                        onClick={() => toggleRule(stage)}
-                        title="Show transition rule"
-                        className={`flex-shrink-0 p-0.5 rounded transition-colors ${meta.text} opacity-60 hover:opacity-100`}
-                      >
-                        <Info size={13} />
-                      </button>
-                    </div>
-                    <p className="text-xs text-charcoal-500 mt-0.5 flex items-center gap-1">
-                      {stage === 'Lead' && contactsLoading ? (
-                        '…'
-                      ) : stage === 'Lead' ? (
-                        <button
-                          onClick={() => setShowLeadList(true)}
-                          className="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-terracotta-600 transition-colors"
-                        >
-                          {counts[stage].toLocaleString()} customers · view list
-                        </button>
-                      ) : stage === 'Pre-Purchase' ? (
-                        `${counts[stage].toLocaleString()} with an abandoned cart`
-                      ) : (
-                        `${counts[stage].toLocaleString()} customers`
-                      )}
-                      {DIAGNOSTIC_STAGES.includes(stage) && counts[stage] === 0 && (
-                        <span title="0 customers — check segment trigger definitions" className="flex-shrink-0">
-                          <AlertTriangle size={11} className="text-amber-600" />
-                        </span>
-                      )}
-                    </p>
-                    {expandedRules.has(stage) && (
-                      <p className="text-[11px] text-charcoal-400 mt-2 leading-relaxed">
-                        {STAGE_TRANSITION_RULES[stage]}
-                      </p>
-                    )}
-                    {stage === 'Lead' && (
-                      <p className="text-[11px] text-charcoal-400 mt-2 leading-relaxed">
-                        <span className="italic">Illustrative sources — </span>
-                        {LEAD_SOURCE_BREAKDOWN.map((s) => `${s.source} ${s.pct}%`).join(' · ')}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-3">
-                    {automations.map((automation) => (
-                      <AutomationCard
-                        key={automation.id}
-                        automation={automation}
-                        onCreate={setActiveAutomation}
-                        realAutomationId={resolvedAutomationIds.get(automation.id)}
-                      />
-                    ))}
-                  </div>
-                </div>
-                {i < JOURNEY_STAGE_ORDER.length - 1 && (
-                  <div className="flex-shrink-0 w-8 flex items-center justify-center mt-10">
-                    <ChevronRight size={18} className="text-sand-400" />
-                  </div>
-                )}
-              </Fragment>
-            )
-          })}
+        <div className="min-w-max" style={{ zoom }}>
+          <StageRow
+            stages={GROWTH_SPINE}
+            counts={counts}
+            contactsLoading={contactsLoading}
+            onShowLeadList={() => setShowLeadList(true)}
+            expandedRules={expandedRules}
+            onToggleRule={toggleRule}
+            onCreateAutomation={setActiveAutomation}
+            resolvedAutomationIds={resolvedAutomationIds}
+          />
+          <DecayConnector />
+          <StageRow
+            stages={DECAY_SPINE}
+            leadingSpacer
+            counts={counts}
+            contactsLoading={contactsLoading}
+            onShowLeadList={() => setShowLeadList(true)}
+            expandedRules={expandedRules}
+            onToggleRule={toggleRule}
+            onCreateAutomation={setActiveAutomation}
+            resolvedAutomationIds={resolvedAutomationIds}
+          />
         </div>
+      </div>
+
+      <div className="mt-3">
+        <CollapsibleCard
+          label="Pre-Purchase Flows"
+          count={counts['Pre-Purchase']}
+          isOpen={prePurchaseOpen}
+          onToggle={() => setPrePurchaseOpen((v) => !v)}
+        >
+          <p className="text-sm text-charcoal-500 mb-4 leading-relaxed">{STAGE_TRANSITION_RULES['Pre-Purchase']}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {JOURNEY_AUTOMATIONS.filter((a) => a.stage === 'Pre-Purchase').map((automation) => (
+              <AutomationCard
+                key={automation.id}
+                automation={automation}
+                onCreate={setActiveAutomation}
+                realAutomationId={resolvedAutomationIds.get(automation.id)}
+              />
+            ))}
+          </div>
+        </CollapsibleCard>
       </div>
 
       {activeAutomation && (

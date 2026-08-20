@@ -12,7 +12,7 @@ export type LifecycleStage =
   | 'Lost'
 
 export const LIFECYCLE_STAGE_ORDER: LifecycleStage[] = [
-  'Never Purchased', 'New', 'Active', 'Winback', 'Loyal', 'VIP', 'At Risk', 'Lapsed', 'Lost',
+  'Never Purchased', 'New', 'Active', 'Loyal', 'VIP', 'Winback', 'At Risk', 'Lapsed', 'Lost',
 ]
 
 export const LIFECYCLE_STAGE_META: Record<LifecycleStage, { bg: string; text: string; border: string }> = {
@@ -46,6 +46,15 @@ export const LIFECYCLE_STAGE_META: Record<LifecycleStage, { bg: string; text: st
 // - 2026-07-15  Re-added 'Active' (2-3 orders, recent) between 'New' and 'Loyal' —
 //   the initial unification had folded it into 'Loyal'. 'Loyal' and 'VIP' shifted
 //   up to make room: Loyal was 2+/4+, now 4-6/7+.
+// - 2026-08-20  Reworked the decay waterfall for the Journey tab's new two-row
+//   branching diagram: added WINBACK_START_DAYS (70) as its own tier ahead of
+//   AT_RISK_START_DAYS (45→90); LAPSED_START_DAYS moved 90→120; LOST_DAYS stays
+//   180. Winback and At Risk are now order-count-independent — dropped the old
+//   "1 order → Winback, 2+ orders → At Risk" split. This also REVERSES the
+//   2026-07-15 decision that VIP skips the At Risk/Lapsed/Winback tiers: VIPs
+//   now decay through Winback → At Risk → Lapsed → Lost on the same recency
+//   thresholds as everyone else, only reachable via order count (7+), no longer
+//   exempt from it.
 
 /** Orders needed to leave 'Active' and become 'Loyal'. Below this (2-3 orders),
  *  a recent repeat customer is 'Active'. */
@@ -56,18 +65,22 @@ export const LOYAL_MIN_ORDERS = 4
  *  app can use to pick a defensible euro figure yet. */
 export const VIP_MIN_ORDERS = 7
 
-/** Days since last order before a repeat customer below the VIP tier is flagged
- *  ('At Risk'), or a one-time buyer is flagged ('Winback'). Below this, a 1-order
- *  customer is 'New' and a 2+-order non-VIP customer is 'Loyal'. */
-export const AT_RISK_START_DAYS = 45
+/** Days since last order before any customer — any order count, including VIP —
+ *  is flagged 'Winback'. Below this, stage is decided purely by order count:
+ *  1 order is 'New', 2-3 is 'Active', 4-6 is 'Loyal', 7+ is 'VIP'. */
+export const WINBACK_START_DAYS = 70
 
-/** Days since last order before anyone below the VIP tier becomes 'Lapsed',
- *  regardless of whether they were 'New'/'Winback'/'At Risk'. */
-export const LAPSED_START_DAYS = 90
+/** Days since last order before a 'Winback' customer becomes 'At Risk'. Order-
+ *  count-independent, same as WINBACK_START_DAYS. */
+export const AT_RISK_START_DAYS = 90
 
-/** Days since last order before anyone is 'Lost' — including VIPs. VIP status
- *  grants a longer runway (full 'VIP' status up to this same cutoff, skipping
- *  the At Risk/Lapsed tiers entirely) but doesn't avoid Lost past this point. */
+/** Days since last order before anyone becomes 'Lapsed', regardless of order
+ *  count or which tier ('New'/'Winback'/'At Risk'/'Loyal'/'VIP') they were in. */
+export const LAPSED_START_DAYS = 120
+
+/** Days since last order before anyone is 'Lost' — including VIPs. VIP status no
+ *  longer grants any recency exemption (see 2026-08-20 changelog above); it only
+ *  takes more orders to reach VIP in the first place. */
 export const LOST_DAYS = 180
 
 /** How fresh an abandoned checkout must be to still count as "recent". This is an
@@ -87,17 +100,21 @@ function daysSince(date: Date | null): number {
 }
 
 // The one classifier both the Customers tab and the Journey tab call. First
-// matching rule wins.
+// matching rule wins. Pure function of fresh ordersCount/lastOrderDate — a
+// Winback/At Risk/Lapsed customer who places a new order is automatically
+// reclassified into New/Active/Loyal/VIP on the very next call, no separate
+// "reconversion" state or logic needed anywhere.
 export function classifyCustomerStage(input: SegmentationInput): LifecycleStage {
   if (input.ordersCount === 0) return 'Never Purchased'
   if (input.emailMarketingConsentState === 'unsubscribed') return 'Lost'
 
   const days = daysSince(input.lastOrderDate)
   if (days > LOST_DAYS) return 'Lost'
-  if (input.ordersCount >= VIP_MIN_ORDERS) return 'VIP'
   if (days > LAPSED_START_DAYS) return 'Lapsed'
-  if (days > AT_RISK_START_DAYS) return input.ordersCount === 1 ? 'Winback' : 'At Risk'
+  if (days > AT_RISK_START_DAYS) return 'At Risk'
+  if (days > WINBACK_START_DAYS) return 'Winback'
   if (input.ordersCount === 1) return 'New'
+  if (input.ordersCount >= VIP_MIN_ORDERS) return 'VIP'
   if (input.ordersCount >= LOYAL_MIN_ORDERS) return 'Loyal'
   return 'Active'
 }
@@ -137,12 +154,12 @@ export function getCustomerStages(customers: EnrichedCustomer[]): CustomerStageR
 
 export const STAGE_TRANSITION_RULES: Record<LifecycleStage, string> = {
   'Never Purchased': '0 completed orders',
-  New: `Exactly 1 order, within ${AT_RISK_START_DAYS} days of it`,
-  Active: `2–${LOYAL_MIN_ORDERS - 1} orders, most recent within ${AT_RISK_START_DAYS} days`,
-  Winback: `Exactly 1 order, ${AT_RISK_START_DAYS}–${LAPSED_START_DAYS - 1} days since it`,
-  Loyal: `${LOYAL_MIN_ORDERS}–${VIP_MIN_ORDERS - 1} orders, most recent within ${AT_RISK_START_DAYS} days`,
-  VIP: `${VIP_MIN_ORDERS}+ orders, most recent within ${LOST_DAYS} days`,
-  'At Risk': `2+ orders (below VIP tier), ${AT_RISK_START_DAYS}–${LAPSED_START_DAYS - 1} days since last order`,
-  Lapsed: `${LAPSED_START_DAYS}–${LOST_DAYS - 1} days since last order`,
+  New: `Exactly 1 order, within ${WINBACK_START_DAYS} days of it`,
+  Active: `2–${LOYAL_MIN_ORDERS - 1} orders, most recent within ${WINBACK_START_DAYS} days`,
+  Loyal: `${LOYAL_MIN_ORDERS}–${VIP_MIN_ORDERS - 1} orders, most recent within ${WINBACK_START_DAYS} days`,
+  VIP: `${VIP_MIN_ORDERS}+ orders, most recent within ${WINBACK_START_DAYS} days`,
+  Winback: `Any order count, ${WINBACK_START_DAYS}–${AT_RISK_START_DAYS - 1} days since last order`,
+  'At Risk': `Any order count, ${AT_RISK_START_DAYS}–${LAPSED_START_DAYS - 1} days since last order`,
+  Lapsed: `Any order count, ${LAPSED_START_DAYS}–${LOST_DAYS - 1} days since last order`,
   Lost: `${LOST_DAYS}+ days since last order, or unsubscribed from email marketing`,
 }
