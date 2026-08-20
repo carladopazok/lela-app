@@ -81,6 +81,7 @@ export async function GET(req: NextRequest) {
       const items = order.line_items.map((li) => {
         const productId = li.product_id
         let short: boolean | null = null
+        let availableQty: number | null = null
         let relatedProductTitles: string[] = []
 
         if (inventoryAvailable) {
@@ -90,6 +91,7 @@ export async function GET(req: NextRequest) {
           const resolvedProductId = byId ? productId : byTitle?.productId ?? null
 
           if (qty != null) {
+            availableQty = qty
             short = qty < li.quantity
             if (short && resolvedProductId != null) {
               const relations = relatedProducts.relations[String(resolvedProductId)] ?? []
@@ -101,14 +103,19 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        return { title: li.title, quantity: li.quantity, productId, short, relatedProductTitles }
+        return { title: li.title, quantity: li.quantity, productId, short, availableQty, relatedProductTitles }
       })
 
-      const stockStatus: LateShipment['stockStatus'] = items.some((i) => i.short === true)
+      // Priority: a fully depleted item (0 in stock) is worse than a merely short one
+      // (some stock, just not enough to cover the order) — "sold out" beats "backordered".
+      // Unknown only wins when nothing more specific was found for any item.
+      const stockStatus: LateShipment['stockStatus'] = items.some((i) => i.short === true && i.availableQty === 0)
         ? 'sold-out'
-        : items.some((i) => i.short === null)
-          ? 'unknown'
-          : 'in-stock'
+        : items.some((i) => i.short === true && (i.availableQty ?? 0) > 0)
+          ? 'backordered'
+          : items.some((i) => i.short === null)
+            ? 'unknown'
+            : 'in-stock'
 
       const customerEmail = order.customer?.email || order.email || ''
 

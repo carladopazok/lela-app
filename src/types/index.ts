@@ -152,10 +152,11 @@ export interface LateShipment {
     quantity: number
     productId: number | null
     short: boolean | null
+    availableQty: number | null
     relatedProductTitles: string[]
   }>
   totalPrice: string
-  stockStatus: 'in-stock' | 'sold-out' | 'unknown'
+  stockStatus: 'in-stock' | 'sold-out' | 'backordered' | 'unknown'
   contactedAt: string | null
 }
 

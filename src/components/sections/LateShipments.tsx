@@ -14,12 +14,14 @@ function formatDate(iso: string) {
 const STOCK_BADGE: Record<LateShipment['stockStatus'], string> = {
   'in-stock': 'bg-olive-100 text-olive-600 border border-olive-200',
   'sold-out': 'bg-red-100 text-red-700 border border-red-200',
+  'backordered': 'bg-amber-100 text-amber-700 border border-amber-200',
   'unknown': 'bg-sand-100 text-charcoal-500 border border-sand-300',
 }
 
 const STOCK_LABEL: Record<LateShipment['stockStatus'], string> = {
   'in-stock': 'In Stock',
   'sold-out': 'Sold Out',
+  'backordered': 'Backordered',
   'unknown': 'Unknown',
 }
 
@@ -146,6 +148,28 @@ export default function LateShipments({
           customerEmail: s.customerEmail,
           customerName: s.customerName,
           items: s.items.filter((i) => i.short === true),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setActionState((p) => { const n = { ...p }; delete n[s.id]; return n })
+      onNavigateToTicket?.(data.ticket.id, data.draftBody)
+    } catch {
+      setActionState((p) => ({ ...p, [s.id]: 'error' }))
+    }
+  }
+
+  async function notifyBackorder(s: LateShipment) {
+    setActionState((p) => ({ ...p, [s.id]: 'working' }))
+    try {
+      const res = await fetch('/api/shopify/late-shipments/backorder-ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderName: s.orderName,
+          customerEmail: s.customerEmail,
+          customerName: s.customerName,
+          items: s.items.filter((i) => i.short === true && (i.availableQty ?? 0) > 0),
         }),
       })
       const data = await res.json()
@@ -293,6 +317,16 @@ export default function LateShipments({
                       >
                         {state === 'working' ? <Loader2 size={12} className="animate-spin" /> : <Mail size={12} />}
                         Contact Customer
+                      </button>
+                    )}
+                    {s.stockStatus === 'backordered' && (
+                      <button
+                        onClick={() => notifyBackorder(s)}
+                        disabled={state === 'working' || !!s.contactedAt}
+                        className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors disabled:opacity-40 disabled:bg-sand-100 disabled:text-charcoal-400 disabled:hover:bg-sand-100 disabled:cursor-not-allowed"
+                      >
+                        {state === 'working' ? <Loader2 size={12} className="animate-spin" /> : <Mail size={12} />}
+                        Notify Backorder
                       </button>
                     )}
                     {s.stockStatus === 'in-stock' && (
