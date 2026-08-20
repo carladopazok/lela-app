@@ -372,6 +372,12 @@ function spineColumnCenters(count: number, columnWidth: number, gapWidth: number
   return Array.from({ length: count }, (_, i) => i * step + columnWidth / 2)
 }
 
+// Stable per-stage DOM id so the Journey Overview's mini pills can scroll the
+// full-size map to the matching card (see scrollToStage in CustomerJourney).
+function stageCardId(stage: JourneyStage): string {
+  return `journey-stage-card-${stage.toLowerCase().replace(/\s+/g, '-')}`
+}
+
 function StageColumn({
   stage,
   count,
@@ -382,6 +388,7 @@ function StageColumn({
   automations,
   onCreateAutomation,
   resolvedAutomationIds,
+  highlighted,
 }: {
   stage: JourneyStage
   count: number
@@ -392,11 +399,16 @@ function StageColumn({
   automations: JourneyAutomation[]
   onCreateAutomation: (automation: JourneyAutomation) => void
   resolvedAutomationIds: Map<string, string>
+  highlighted?: boolean
 }) {
   const meta = JOURNEY_STAGE_META[stage]
   return (
-    <div style={{ width: STAGE_COLUMN_WIDTH }} className="flex-shrink-0">
-      <div className={`rounded-2xl border px-4 py-3 mb-3 ${meta.bg} ${meta.border}`}>
+    <div id={stageCardId(stage)} style={{ width: STAGE_COLUMN_WIDTH }} className="flex-shrink-0 scroll-mt-4">
+      <div
+        className={`rounded-2xl border px-4 py-3 mb-3 transition-shadow ${meta.bg} ${meta.border} ${
+          highlighted ? 'ring-2 ring-terracotta-400 ring-offset-2' : ''
+        }`}
+      >
         <div className="flex items-center justify-between gap-1">
           <p className={`font-serif text-lg tracking-tight ${meta.text}`}>{stage}</p>
           <button
@@ -473,6 +485,7 @@ function StageRow({
   onToggleRule,
   onCreateAutomation,
   resolvedAutomationIds,
+  highlightedStage,
 }: {
   stages: JourneyStage[]
   leadingSpacer?: boolean
@@ -483,6 +496,7 @@ function StageRow({
   onToggleRule: (stage: JourneyStage) => void
   onCreateAutomation: (automation: JourneyAutomation) => void
   resolvedAutomationIds: Map<string, string>
+  highlightedStage?: JourneyStage | null
 }) {
   return (
     <div className="flex items-start">
@@ -504,6 +518,7 @@ function StageRow({
             automations={JOURNEY_AUTOMATIONS.filter((a) => a.stage === stage)}
             onCreateAutomation={onCreateAutomation}
             resolvedAutomationIds={resolvedAutomationIds}
+            highlighted={highlightedStage === stage}
           />
           {i < stages.length - 1 && (
             <div style={{ width: STAGE_GAP_WIDTH }} className="flex-shrink-0 flex items-center justify-center mt-10">
@@ -530,7 +545,10 @@ function DecayConnector() {
   const spanWidth = centers[centers.length - 1] - centers[0]
   const trunkX = centers[0] // coincides with Winback's own center below, via the matching leadingSpacer on the decay row
   const tickHeight = 18
-  const trunkHeight = 22
+  const arrowSize = 14
+  // The trunk line stops short of the arrowhead (instead of running its full length
+  // underneath it) so the dashed line and the chevron don't visually overlap/cross.
+  const lineHeight = 14
 
   return (
     <div>
@@ -540,16 +558,16 @@ function DecayConnector() {
       >
         Any of New, Active, Loyal, or VIP — {WINBACK_START_DAYS}+ days without a new order
       </p>
-      <div className="relative" style={{ height: tickHeight + trunkHeight }}>
+      <div className="relative" style={{ height: tickHeight + lineHeight + arrowSize }}>
         {centers.map((x) => (
           <div key={x} className="absolute border-l-2 border-dashed border-orange-300" style={{ left: x, top: 0, height: tickHeight }} />
         ))}
         <div className="absolute border-t-2 border-dashed border-orange-300" style={{ left: spanLeft, width: spanWidth, top: tickHeight }} />
-        <div className="absolute border-l-2 border-dashed border-orange-300" style={{ left: trunkX, top: tickHeight, height: trunkHeight }} />
+        <div className="absolute border-l-2 border-dashed border-orange-300" style={{ left: trunkX, top: tickHeight, height: lineHeight }} />
         <ChevronRight
-          size={14}
+          size={arrowSize}
           className="absolute rotate-90 text-orange-400"
-          style={{ left: trunkX - 7, top: tickHeight + trunkHeight - 13 }}
+          style={{ left: trunkX - arrowSize / 2, top: tickHeight + lineHeight }}
         />
       </div>
     </div>
@@ -566,16 +584,19 @@ function DecayConnector() {
 const MINI_PILL_WIDTH = 110
 const MINI_GAP_WIDTH = 16
 
-function MiniStagePill({ stage, count }: { stage: JourneyStage; count: number }) {
+function MiniStagePill({ stage, count, onClick }: { stage: JourneyStage; count: number; onClick: () => void }) {
   const meta = JOURNEY_STAGE_META[stage]
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
+      title={`Jump to ${stage} in the journey map below`}
       style={{ width: MINI_PILL_WIDTH }}
-      className={`flex-shrink-0 rounded-xl border px-3 py-2 ${meta.bg} ${meta.border}`}
+      className={`flex-shrink-0 rounded-xl border px-3 py-2 text-left hover:ring-2 hover:ring-terracotta-300 transition-shadow cursor-pointer ${meta.bg} ${meta.border}`}
     >
       <p className={`text-xs font-medium truncate ${meta.text}`}>{stage}</p>
       <p className="text-[10px] text-charcoal-400">{count.toLocaleString()}</p>
-    </div>
+    </button>
   )
 }
 
@@ -583,17 +604,19 @@ function MiniStageRow({
   stages,
   leadingSpacer,
   counts,
+  onStageClick,
 }: {
   stages: JourneyStage[]
   leadingSpacer?: boolean
   counts: Record<JourneyStage, number>
+  onStageClick: (stage: JourneyStage) => void
 }) {
   return (
     <div className="flex items-center">
       {leadingSpacer && <div style={{ width: MINI_PILL_WIDTH + MINI_GAP_WIDTH }} className="flex-shrink-0" />}
       {stages.map((stage, i) => (
         <Fragment key={stage}>
-          <MiniStagePill stage={stage} count={counts[stage]} />
+          <MiniStagePill stage={stage} count={counts[stage]} onClick={() => onStageClick(stage)} />
           {i < stages.length - 1 && (
             <div style={{ width: MINI_GAP_WIDTH }} className="flex-shrink-0 flex items-center justify-center">
               <ChevronRight size={12} className="text-sand-400" />
@@ -613,7 +636,9 @@ function MiniDecayConnector() {
   const spanWidth = centers[centers.length - 1] - centers[0]
   const trunkX = centers[0]
   const tickHeight = 10
-  const trunkHeight = 14
+  const arrowSize = 10
+  // Same fix as DecayConnector: stop the line short of the arrowhead so they don't overlap.
+  const lineHeight = 8
 
   return (
     <div>
@@ -623,36 +648,47 @@ function MiniDecayConnector() {
       >
         Any of these four — {WINBACK_START_DAYS}+ days without a new order
       </p>
-      <div className="relative" style={{ height: tickHeight + trunkHeight }}>
+      <div className="relative" style={{ height: tickHeight + lineHeight + arrowSize }}>
         {centers.map((x) => (
           <div key={x} className="absolute border-l border-dashed border-orange-300" style={{ left: x, top: 0, height: tickHeight }} />
         ))}
         <div className="absolute border-t border-dashed border-orange-300" style={{ left: spanLeft, width: spanWidth, top: tickHeight }} />
-        <div className="absolute border-l border-dashed border-orange-300" style={{ left: trunkX, top: tickHeight, height: trunkHeight }} />
+        <div className="absolute border-l border-dashed border-orange-300" style={{ left: trunkX, top: tickHeight, height: lineHeight }} />
         <ChevronRight
-          size={10}
+          size={arrowSize}
           className="absolute rotate-90 text-orange-400"
-          style={{ left: trunkX - 5, top: tickHeight + trunkHeight - 9 }}
+          style={{ left: trunkX - arrowSize / 2, top: tickHeight + lineHeight }}
         />
       </div>
     </div>
   )
 }
 
-function JourneyOverview({ counts }: { counts: Record<JourneyStage, number> }) {
+function JourneyOverview({
+  counts,
+  isOpen,
+  onToggle,
+  onStageClick,
+}: {
+  counts: Record<JourneyStage, number>
+  isOpen: boolean
+  onToggle: () => void
+  onStageClick: (stage: JourneyStage) => void
+}) {
   return (
-    <div className="bg-white rounded-2xl shadow-card p-5 mb-3">
-      <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">Journey Overview</p>
-      <div className="overflow-x-auto">
-        <div className="min-w-max">
-          <MiniStageRow stages={GROWTH_SPINE} counts={counts} />
-          <MiniDecayConnector />
-          <MiniStageRow stages={DECAY_SPINE} leadingSpacer counts={counts} />
+    <div className="mb-3">
+      <CollapsibleCard label="Journey Overview" isOpen={isOpen} onToggle={onToggle}>
+        <div className="overflow-x-auto">
+          <div className="min-w-max">
+            <MiniStageRow stages={GROWTH_SPINE} counts={counts} onStageClick={onStageClick} />
+            <MiniDecayConnector />
+            <MiniStageRow stages={DECAY_SPINE} leadingSpacer counts={counts} onStageClick={onStageClick} />
+          </div>
         </div>
-      </div>
-      <p className="text-[11px] text-charcoal-400 mt-3">
-        Pre-Purchase flows (cart/browse abandonment) can trigger at any point in this journey — see the card below.
-      </p>
+        <p className="text-[11px] text-charcoal-400 mt-3">
+          Pre-Purchase flows (cart/browse abandonment) can trigger at any point in this journey — see the card below.
+        </p>
+      </CollapsibleCard>
     </div>
   )
 }
@@ -673,6 +709,8 @@ export default function CustomerJourney({
   const [activeAutomation, setActiveAutomation] = useState<JourneyAutomation | null>(null)
   const [showLeadList, setShowLeadList] = useState(false)
   const [prePurchaseOpen, setPrePurchaseOpen] = useState(false)
+  const [overviewOpen, setOverviewOpen] = useState(true)
+  const [highlightedStage, setHighlightedStage] = useState<JourneyStage | null>(null)
   const [zoom, setZoom] = useState(1)
   const [expandedRules, setExpandedRules] = useState<Set<JourneyStage>>(new Set())
   const [syncing, setSyncing] = useState(false)
@@ -731,6 +769,14 @@ export default function CustomerJourney({
 
   function zoomIn() { setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100)) }
   function zoomOut() { setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100)) }
+
+  // Journey Overview pills call this to jump to + briefly highlight the matching
+  // card in the full-size map below (see stageCardId in StageColumn).
+  function scrollToStage(stage: JourneyStage) {
+    document.getElementById(stageCardId(stage))?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+    setHighlightedStage(stage)
+    window.setTimeout(() => setHighlightedStage((current) => (current === stage ? null : current)), 1600)
+  }
 
   function toggleRule(stage: JourneyStage) {
     setExpandedRules((prev) => {
@@ -899,7 +945,12 @@ export default function CustomerJourney({
 
       <StageAttributionCard onNavigateToEmailAttribution={onNavigateToEmailAttribution} />
 
-      <JourneyOverview counts={counts} />
+      <JourneyOverview
+        counts={counts}
+        isOpen={overviewOpen}
+        onToggle={() => setOverviewOpen((v) => !v)}
+        onStageClick={scrollToStage}
+      />
 
       <div className="overflow-x-auto pb-4">
         <div className="min-w-max" style={{ zoom }}>
@@ -912,6 +963,7 @@ export default function CustomerJourney({
             onToggleRule={toggleRule}
             onCreateAutomation={setActiveAutomation}
             resolvedAutomationIds={resolvedAutomationIds}
+            highlightedStage={highlightedStage}
           />
           <DecayConnector />
           <StageRow
@@ -924,6 +976,7 @@ export default function CustomerJourney({
             onToggleRule={toggleRule}
             onCreateAutomation={setActiveAutomation}
             resolvedAutomationIds={resolvedAutomationIds}
+            highlightedStage={highlightedStage}
           />
         </div>
       </div>
