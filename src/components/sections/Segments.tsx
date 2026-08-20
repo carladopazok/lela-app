@@ -6,6 +6,7 @@ import { computeRFM, SEGMENT_ORDER, SEGMENT_META } from '@/lib/rfm'
 import type { RFMSegment } from '@/lib/rfm'
 import MaskedEmail, { HideAllEmailsButton } from '@/components/ui/MaskedEmail'
 import CollapsibleCard from '@/components/ui/CollapsibleCard'
+import { tagLabel } from '@/components/ui/TagBadge'
 import type { EnrichedCustomer } from '@/types'
 import { CUSTOMER_TAGS } from '@/types'
 
@@ -309,7 +310,7 @@ export default function Segments({
             return (
               <SegmentCard
                 key={tag}
-                label={tag}
+                label={tagLabel(tag)}
                 count={count}
                 total={total}
                 style={TAG_STYLES[tag] ?? CUSTOM_TAG_STYLE}
