@@ -1,10 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { TrendingUp, PackageX, Mail, Users, HeadphonesIcon, LineChart, Sparkles, CheckCircle2, AlertCircle, Boxes, ListTodo, Bell, Plug } from 'lucide-react'
+import { TrendingUp, PackageX, Mail, Users, HeadphonesIcon, LineChart, Sparkles, CheckCircle2, AlertCircle, Boxes, ListTodo, Bell, Plug, Clock } from 'lucide-react'
 import { useDummyData } from '@/lib/dummy-data-context'
 
-export type SectionId = 'attention-feed' | 'sales-overview' | 'late-shipments' | 'products-inventory' | 'email-performance' | 'customer-intelligence' | 'customer-service' | 'forecast' | 'integrations' | 'pending-work' | 'about'
+export type SectionId = 'attention-feed' | 'sales-overview' | 'late-shipments' | 'products-inventory' | 'email-performance' | 'customer-intelligence' | 'customer-service' | 'forecast' | 'integrations' | 'pending-work' | 'coming-soon' | 'about'
 
 // Main nav — Pending Work and Integrations are rendered separately below, set apart (smaller)
 // at the bottom of the nav column. About This Tool lives outside the nav entirely, as a small
@@ -23,6 +23,7 @@ const NAV_ITEMS: { id: SectionId; label: string; Icon: React.ElementType }[] = [
 const SECONDARY_NAV_ITEMS: { id: SectionId; label: string; Icon: React.ElementType }[] = [
   { id: 'pending-work', label: 'Pending Work', Icon: ListTodo },
   { id: 'integrations', label: 'Integrations', Icon: Plug },
+  { id: 'coming-soon', label: 'Coming Soon', Icon: Clock },
 ]
 
 interface SidebarProps {
