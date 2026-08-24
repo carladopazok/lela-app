@@ -2,6 +2,8 @@
 
 A personal ecommerce operations dashboard for [carladopazo.com](https://carladopazo.com), a Shopify store. Built with Next.js 14 (App Router), TypeScript, and Tailwind CSS.
 
+This repository is public for portfolio purposes. All rights reserved — see [LICENSE](./LICENSE); no reuse is permitted without permission.
+
 ## Features
 
 - **Sales Overview** — revenue and order stats with a period selector (Today / 30d / 60d / 90d / 365d / All Time)
