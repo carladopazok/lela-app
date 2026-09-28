@@ -323,6 +323,14 @@ export interface PreorderEntry {
 
 export type PreordersStore = Record<string, PreorderEntry> // keyed by Shopify product id (string)
 
+export interface FinalSaleEntry {
+  text: string
+  status: 'draft' | 'published'
+  updatedAt: string
+}
+
+export type FinalSaleStore = Record<string, FinalSaleEntry> // keyed by Shopify product id (string)
+
 // ─── Back in Stock signups ──────────────────────────────────────────────────
 
 export interface BackInStockSignup {

@@ -24,7 +24,7 @@ import {
 } from '@/lib/product-metrics'
 import { QUALIFYING_RETURN_REASONS } from '@/lib/shopify-returns'
 import { LOW_STOCK_TAG, RESTOCK_EARLY_TAG, type ToggleableProductTag } from '@/lib/product-tags'
-import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry, PreorderEntry } from '@/types'
+import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry, PreorderEntry, FinalSaleEntry } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
 type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status' | 'runway'
@@ -354,6 +354,7 @@ interface ResolvedRow {
   returnFlagged: boolean
   fitNote: FitNoteEntry | null
   preorder: PreorderEntry | null
+  finalSale: FinalSaleEntry | null
   runwayDays: number | null
   lowRunway: boolean
   lowStockFlagged: boolean
@@ -1310,6 +1311,125 @@ function PreorderEditor({
   )
 }
 
+function FinalSaleStatusPill({ entry, onClick }: { entry: FinalSaleEntry; onClick: () => void }) {
+  const published = entry.status === 'published'
+  return (
+    <button
+      onClick={onClick}
+      className={`text-[10px] px-1.5 py-0.5 rounded-full border whitespace-nowrap transition-colors ${
+        published
+          ? 'bg-olive-100 text-olive-700 border-olive-300 hover:bg-olive-200'
+          : 'bg-sand-100 text-charcoal-500 border-sand-300 hover:bg-sand-200'
+      }`}
+      title={
+        published
+          ? 'Final sale message is live on the product metafield (and the lela-final-sale tag is applied) — click to edit or unpublish'
+          : 'Draft final-sale message, not yet on the store — click to edit, publish, or delete'
+      }
+    >
+      Final Sale: {published ? 'published' : 'draft'}
+    </button>
+  )
+}
+
+function FinalSaleEditor({
+  product,
+  entry,
+  onSaveDraft,
+  onPublish,
+  onUnpublish,
+  onDeleteDraft,
+  onClose,
+}: {
+  product: ProductSummary
+  entry: FinalSaleEntry | null
+  onSaveDraft: (productId: number, text: string) => Promise<void>
+  onPublish: (productId: number, text: string) => Promise<void>
+  onUnpublish: (productId: number) => Promise<void>
+  onDeleteDraft: (productId: number) => Promise<void>
+  onClose: () => void
+}) {
+  const [text, setText] = useState(entry?.text ?? '')
+  const [busy, setBusy] = useState<'draft' | 'publish' | 'unpublish' | 'delete' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  if (product.productId == null) {
+    return (
+      <div className="bg-sand-50 rounded-xl p-4 mt-2">
+        <p className="text-sm text-charcoal-400 italic">
+          Final Sale needs full catalog access (a Shopify reconnect) — this product doesn&apos;t have a Shopify
+          product id yet.
+        </p>
+      </div>
+    )
+  }
+  const productId = product.productId
+
+  async function run(action: 'draft' | 'publish' | 'unpublish' | 'delete', fn: () => Promise<void>, closeAfter = false) {
+    setBusy(action)
+    setError(null)
+    try {
+      await fn()
+      if (closeAfter) onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="bg-sand-50 rounded-xl p-4 mt-2">
+      <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400 mb-3">Final Sale</p>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={3}
+        placeholder="e.g. Final sale — this item is made to order and can't be returned or exchanged."
+        className="w-full px-3 py-2 text-sm border border-sand-300 rounded-lg focus:outline-none focus:border-terracotta-400 resize-none"
+      />
+      <div className="flex items-center flex-wrap gap-2 mt-3">
+        <button
+          onClick={() => run('draft', () => onSaveDraft(productId, text))}
+          disabled={busy != null || !text.trim()}
+          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-sand-300 text-charcoal-600 hover:border-terracotta-300 hover:text-terracotta-600 transition-colors disabled:opacity-50"
+        >
+          {busy === 'draft' ? <Loader2 size={11} className="animate-spin" /> : null} Save as draft
+        </button>
+        <button
+          onClick={() => run('publish', () => onPublish(productId, text))}
+          disabled={busy != null || !text.trim()}
+          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-terracotta-500 text-white hover:bg-terracotta-600 transition-colors disabled:opacity-50"
+        >
+          {busy === 'publish' ? <Loader2 size={11} className="animate-spin" /> : null} Save &amp; Publish to Store
+        </button>
+        {entry?.status === 'published' && (
+          <button
+            onClick={() => run('unpublish', () => onUnpublish(productId))}
+            disabled={busy != null}
+            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+          >
+            {busy === 'unpublish' ? <Loader2 size={11} className="animate-spin" /> : null} Unpublish
+          </button>
+        )}
+        {entry?.status === 'draft' && (
+          <button
+            onClick={() => run('delete', () => onDeleteDraft(productId), true)}
+            disabled={busy != null}
+            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+          >
+            {busy === 'delete' ? <Loader2 size={11} className="animate-spin" /> : null} Delete draft
+          </button>
+        )}
+        <button onClick={onClose} className="text-xs px-2 py-1.5 text-charcoal-400 hover:text-charcoal-600">
+          Close
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
+    </div>
+  )
+}
+
 function ReturnReasonTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: ReasonDatum }> }) {
   if (!active || !payload?.length) return null
   const d = payload[0].payload
@@ -1506,6 +1626,12 @@ function ProductRow({
   onPublishPreorder,
   onUnpublishPreorder,
   onDeletePreorderDraft,
+  finalSaleExpanded,
+  onToggleFinalSaleExpand,
+  onSaveFinalSaleDraft,
+  onPublishFinalSale,
+  onUnpublishFinalSale,
+  onDeleteFinalSaleDraft,
 }: {
   row: ResolvedRow
   index: number
@@ -1569,6 +1695,12 @@ function ProductRow({
   onPublishPreorder: (productId: number, text: string) => Promise<void>
   onUnpublishPreorder: (productId: number) => Promise<void>
   onDeletePreorderDraft: (productId: number) => Promise<void>
+  finalSaleExpanded: boolean
+  onToggleFinalSaleExpand: () => void
+  onSaveFinalSaleDraft: (productId: number, text: string) => Promise<void>
+  onPublishFinalSale: (productId: number, text: string) => Promise<void>
+  onUnpublishFinalSale: (productId: number) => Promise<void>
+  onDeleteFinalSaleDraft: (productId: number) => Promise<void>
 }) {
   const { product: p, badge, isSoldOutLive: soldOut } = row
   function money(n: number) { return fmt(n, currency, locale) }
@@ -1617,7 +1749,30 @@ function ProductRow({
                   </button>
                 )}
                 {row.fitNote && <FitNoteStatusPill entry={row.fitNote} onClick={onToggleFitNoteExpand} />}
-                {row.preorder && <PreorderStatusPill entry={row.preorder} onClick={onTogglePreorderExpand} />}
+                {row.preorder ? (
+                  <PreorderStatusPill entry={row.preorder} onClick={onTogglePreorderExpand} />
+                ) : (
+                  p.productId != null && (
+                    <button
+                      onClick={onTogglePreorderExpand}
+                      className="text-[10px] px-1.5 py-0.5 rounded-lg border border-sand-300 text-charcoal-500 hover:border-terracotta-300 hover:text-terracotta-600 transition-colors whitespace-nowrap"
+                    >
+                      + Add Pre-order
+                    </button>
+                  )
+                )}
+                {row.finalSale ? (
+                  <FinalSaleStatusPill entry={row.finalSale} onClick={onToggleFinalSaleExpand} />
+                ) : (
+                  p.productId != null && (
+                    <button
+                      onClick={onToggleFinalSaleExpand}
+                      className="text-[10px] px-1.5 py-0.5 rounded-lg border border-sand-300 text-charcoal-500 hover:border-terracotta-300 hover:text-terracotta-600 transition-colors whitespace-nowrap"
+                    >
+                      + Add Final Sale
+                    </button>
+                  )
+                )}
                 {row.lowRunway && (
                   <button
                     onClick={onToggleStockActionsExpand}
@@ -1823,6 +1978,21 @@ function ProductRow({
               onUnpublish={onUnpublishPreorder}
               onDeleteDraft={onDeletePreorderDraft}
               onClose={onTogglePreorderExpand}
+            />
+          </td>
+        </tr>
+      )}
+      {p.productId != null && finalSaleExpanded && (
+        <tr>
+          <td colSpan={5} className="pb-3">
+            <FinalSaleEditor
+              product={p}
+              entry={row.finalSale}
+              onSaveDraft={onSaveFinalSaleDraft}
+              onPublish={onPublishFinalSale}
+              onUnpublish={onUnpublishFinalSale}
+              onDeleteDraft={onDeleteFinalSaleDraft}
+              onClose={onToggleFinalSaleExpand}
             />
           </td>
         </tr>
@@ -2592,6 +2762,75 @@ export default function ProductsInventory({
     })
   }
 
+  // Final Sale — local draft state plus the published custom.final_sale metafield status. Same
+  // shape as Pre-order above; publishing also applies the lela-final-sale Shopify tag server-side.
+  const [finalSaleOverrides, setFinalSaleOverrides] = useState<Record<string, FinalSaleEntry>>({})
+  const [finalSaleExpandedIds, setFinalSaleExpandedIds] = useState<Set<number>>(new Set())
+
+  function toggleFinalSaleExpand(productId: number | null) {
+    if (productId == null) return
+    setFinalSaleExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(productId)) next.delete(productId)
+      else next.add(productId)
+      return next
+    })
+  }
+
+  function finalSaleFor(p: ProductSummary): FinalSaleEntry | null {
+    if (p.productId == null) return null
+    return finalSaleOverrides[String(p.productId)] ?? null
+  }
+
+  async function handleSaveFinalSaleDraft(productId: number, text: string) {
+    const res = await fetch('/api/shopify/product-final-sale', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productId, text }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to save draft')
+    setFinalSaleOverrides((prev) => ({ ...prev, [String(productId)]: data.finalSale[String(productId)] }))
+  }
+
+  async function handlePublishFinalSale(productId: number, text: string) {
+    const res = await fetch(`/api/shopify/products/${productId}/final-sale`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to publish final sale')
+    setFinalSaleOverrides((prev) => ({ ...prev, [String(productId)]: data.finalSale }))
+  }
+
+  async function handleUnpublishFinalSale(productId: number) {
+    const res = await fetch(`/api/shopify/products/${productId}/final-sale`, { method: 'DELETE' })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to unpublish final sale')
+    setFinalSaleOverrides((prev) => {
+      const next = { ...prev }
+      if (data.finalSale) next[String(productId)] = data.finalSale
+      else delete next[String(productId)]
+      return next
+    })
+  }
+
+  async function handleDeleteFinalSaleDraft(productId: number) {
+    const res = await fetch('/api/shopify/product-final-sale', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productId }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Failed to delete draft')
+    setFinalSaleOverrides((prev) => {
+      const next = { ...prev }
+      delete next[String(productId)]
+      return next
+    })
+  }
+
   // Stockout Actions — two 1-click Shopify product tags (lela-low-stock, lela-restock-early).
   // No local draft state like Fit Note needs: Shopify's own tags are the source of truth, so
   // toggling just re-fetches the resulting tag list from the PATCH response.
@@ -2648,12 +2887,13 @@ export default function ProductsInventory({
     setLoading(true)
     setError(null)
     try {
-      const [productsRes, categoriesRes, cogsRes, fitNotesRes, preordersRes] = await Promise.all([
+      const [productsRes, categoriesRes, cogsRes, fitNotesRes, preordersRes, finalSaleRes] = await Promise.all([
         fetch(withDummyParam('/api/shopify/products', includeDummy)),
         fetch('/api/shopify/product-categories'),
         fetch('/api/shopify/product-cogs'),
         fetch('/api/shopify/product-fit-notes'),
         fetch('/api/shopify/product-preorders'),
+        fetch('/api/shopify/product-final-sale'),
       ])
       const productsData = await productsRes.json()
       if (!productsRes.ok) throw new Error(productsData.error)
@@ -2661,6 +2901,7 @@ export default function ProductsInventory({
       const cogsData = await cogsRes.json()
       const fitNotesData = await fitNotesRes.json()
       const preordersData = await preordersRes.json()
+      const finalSaleData = await finalSaleRes.json()
 
       setProducts(productsData.products ?? [])
       setCurrency(productsData.currency ?? 'EUR')
@@ -2673,6 +2914,7 @@ export default function ProductsInventory({
       setCogsOverrides(cogsData.cogs ?? {})
       setFitNoteOverrides(fitNotesData.fitNotes ?? {})
       setPreorderOverrides(preordersData.preorders ?? {})
+      setFinalSaleOverrides(finalSaleData.finalSale ?? {})
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -3126,6 +3368,7 @@ export default function ProductsInventory({
         returnFlagged: p.returnFlagged,
         fitNote: fitNoteFor(p),
         preorder: preorderFor(p),
+        finalSale: finalSaleFor(p),
         runwayDays: getRunwayDays(p),
         lowRunway: isLowRunway(p),
         lowStockFlagged: tagOverrides[p.productId ?? -1]?.lowStockFlagged ?? p.lowStockFlagged,
@@ -3133,7 +3376,7 @@ export default function ProductsInventory({
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, fitNoteOverrides, preorderOverrides, tagOverrides])
+  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, fitNoteOverrides, preorderOverrides, finalSaleOverrides, tagOverrides])
 
   // Exports exactly what the Stalled Inventory table + each row's "Estimate recovery" panel
   // show — one row per product currently listed (post search/collection/sort filters), with
@@ -3434,6 +3677,7 @@ export default function ProductsInventory({
                       const restockError = pid != null ? restockErrors[pid] ?? null : null
                       const fitNoteExpanded = pid != null && fitNoteExpandedIds.has(pid)
                       const preorderExpanded = pid != null && preorderExpandedIds.has(pid)
+                      const finalSaleExpanded = pid != null && finalSaleExpandedIds.has(pid)
                       const stockActionsExpanded = pid != null && stockActionsExpandedIds.has(pid)
                       const lowStockBusy = pid != null && !!tagToggleBusy[`${pid}:${LOW_STOCK_TAG}`]
                       const restockEarlyBusy = pid != null && !!tagToggleBusy[`${pid}:${RESTOCK_EARLY_TAG}`]
@@ -3516,6 +3760,12 @@ export default function ProductsInventory({
                           onPublishPreorder={handlePublishPreorder}
                           onUnpublishPreorder={handleUnpublishPreorder}
                           onDeletePreorderDraft={handleDeletePreorderDraft}
+                          finalSaleExpanded={finalSaleExpanded}
+                          onToggleFinalSaleExpand={() => toggleFinalSaleExpand(pid)}
+                          onSaveFinalSaleDraft={handleSaveFinalSaleDraft}
+                          onPublishFinalSale={handlePublishFinalSale}
+                          onUnpublishFinalSale={handleUnpublishFinalSale}
+                          onDeleteFinalSaleDraft={handleDeleteFinalSaleDraft}
                         />
                       )
                     })}

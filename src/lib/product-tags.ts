@@ -2,7 +2,8 @@ import type { createShopifyClient } from './shopify'
 
 export const LOW_STOCK_TAG = 'lela-low-stock'
 export const RESTOCK_EARLY_TAG = 'lela-restock-early'
-export const TOGGLEABLE_PRODUCT_TAGS = [LOW_STOCK_TAG, RESTOCK_EARLY_TAG] as const
+export const FINAL_SALE_TAG = 'lela-final-sale'
+export const TOGGLEABLE_PRODUCT_TAGS = [LOW_STOCK_TAG, RESTOCK_EARLY_TAG, FINAL_SALE_TAG] as const
 export type ToggleableProductTag = (typeof TOGGLEABLE_PRODUCT_TAGS)[number]
 
 // Shopify's tags PUT fully replaces the tag list, so this re-reads the product's current tags

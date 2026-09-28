@@ -1,0 +1,28 @@
+{%- comment -%}
+  Final Sale — reference only, not part of the Next.js build.
+
+  Renders the custom.final_sale product metafield (written from the Lela dashboard's
+  Products & Inventory → "+ Add Final Sale" flow) directly on the product page. Purely a
+  Liquid read — no API calls, no JS needed, since the value already lives on the product.
+
+  Setup:
+  1. Shopify admin → Online Store → Themes → Edit code → Snippets → Add a new snippet
+     → name it "final-sale" → paste this file's contents.
+  2. Render it from your product template (e.g. main-product.liquid), near the
+     add-to-cart button, wherever it should catch a buyer's eye before checkout:
+       {% render 'final-sale', product: product %}
+{%- endcomment -%}
+
+{%- assign final_sale = product.metafields.custom.final_sale.value -%}
+{%- if final_sale != blank -%}
+  <div class="final-sale-note">
+    <p class="final-sale-note__label">Final Sale</p>
+    <p class="final-sale-note__text">{{ final_sale }}</p>
+  </div>
+
+  <style>
+    .final-sale-note { margin: 1rem 0; padding: 0.75rem 1rem; border-left: 3px solid #8A3B2B; background: #FBF3EC; border-radius: 0 8px 8px 0; }
+    .final-sale-note__label { margin: 0 0 0.25rem; font-size: 0.9rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #8A3B2B; }
+    .final-sale-note__text { margin: 0; font-size: 1.1rem; line-height: 1.4; }
+  </style>
+{%- endif -%}
