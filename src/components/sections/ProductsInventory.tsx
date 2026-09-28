@@ -29,7 +29,8 @@ import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
 type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status' | 'runway'
 type SpreadsheetSortKey =
-  | 'name' | 'created' | 'cost' | 'price' | 'markedDown' | 'margin' | 'discount' | 'discountedPrice' | 'discountedMargin'
+  | 'name' | 'created' | 'stock' | 'unitsSold' | 'cost' | 'price' | 'markedDown' | 'margin' | 'discount'
+  | 'discountedPrice' | 'discountedMargin'
 type SortDir = 'asc' | 'desc'
 type StatusBadge = 'bestseller' | 'soldout' | 'stalled' | null
 
@@ -382,6 +383,7 @@ function SortableTh<K extends string>({
   dir,
   onSort,
   align = 'right',
+  title,
 }: {
   label: string
   sortKeyValue: K
@@ -389,10 +391,11 @@ function SortableTh<K extends string>({
   dir: SortDir
   onSort: (key: K) => void
   align?: 'left' | 'right'
+  title?: string
 }) {
   const active = activeKey === sortKeyValue
   return (
-    <th className={`pb-3 px-4 font-medium whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>
+    <th title={title} className={`pb-3 px-4 font-medium whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>
       <button
         onClick={() => onSort(sortKeyValue)}
         className={`inline-flex items-center gap-1 hover:text-charcoal-600 transition-colors ${active ? 'text-charcoal-600' : ''}`}
@@ -1977,6 +1980,12 @@ function MarginSpreadsheet({
           cmp = (a.createdAt ? new Date(a.createdAt).getTime() : -Infinity) -
             (b.createdAt ? new Date(b.createdAt).getTime() : -Infinity)
           break
+        case 'stock':
+          cmp = (a.inventoryQuantity ?? -Infinity) - (b.inventoryQuantity ?? -Infinity)
+          break
+        case 'unitsSold':
+          cmp = a.unitsSold - b.unitsSold
+          break
         case 'cost':
           cmp = (cogsForRow(a, cogsOverrides) ?? -Infinity) - (cogsForRow(b, cogsOverrides) ?? -Infinity)
           break
@@ -2070,6 +2079,8 @@ function MarginSpreadsheet({
             <tr className="text-xs text-charcoal-400 border-b border-sand-200">
               <SortableTh label="Product" sortKeyValue="name" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="left" />
               <SortableTh label="Date Added" sortKeyValue="created" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh label="Units in Stock" sortKeyValue="stock" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh label="Units Sold" sortKeyValue="unitsSold" activeKey={sortKey} dir={sortDir} onSort={handleSort} title="Trailing 12 months" />
               <SortableTh label="Cost" sortKeyValue="cost" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Price" sortKeyValue="price" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Marked Down" sortKeyValue="markedDown" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
@@ -2115,6 +2126,12 @@ function MarginSpreadsheet({
                   </td>
                   <td className="py-3 px-4 text-right text-charcoal-500 whitespace-nowrap">
                     {formatDate(p.createdAt)}
+                  </td>
+                  <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">
+                    {p.inventoryQuantity != null ? p.inventoryQuantity.toLocaleString() : '—'}
+                  </td>
+                  <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">
+                    {p.unitsSold.toLocaleString()}
                   </td>
                   <td className="py-3 px-4 text-right">
                     <CogsEditor
