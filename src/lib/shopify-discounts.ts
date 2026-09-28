@@ -88,3 +88,29 @@ export async function markdownProductVariants(
 
   return { variantsUpdated: updated.length }
 }
+
+// Undoes a markdown: restores every variant that currently has a compare_at_price back to
+// that price and clears compare_at_price, the exact inverse of markdownProductVariants.
+// Variants with no compare_at_price (never marked down) are left untouched.
+export async function revertMarkdown(
+  shopify: Shopify,
+  productId: string | number,
+): Promise<{ variantsReverted: number }> {
+  const { product } = await shopify.get<ShopifyProductVariantsResponse>(`/products/${productId}.json`)
+  const variants = product.variants ?? []
+
+  const toRevert = variants.filter((v) => v.compare_at_price != null)
+  if (toRevert.length === 0) return { variantsReverted: 0 }
+
+  const updated = toRevert.map((v) => ({
+    id: v.id,
+    price: v.compare_at_price as string,
+    compare_at_price: null,
+  }))
+
+  await shopify.put(`/products/${productId}.json`, {
+    product: { id: Number(productId), variants: updated },
+  })
+
+  return { variantsReverted: updated.length }
+}

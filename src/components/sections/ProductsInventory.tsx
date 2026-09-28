@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   RefreshCw, AlertCircle, Package, Check, X, Info, Boxes, XCircle, Clock, Mail, Loader2,
   Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, ArrowLeft, Users,
-  AlertTriangle, ExternalLink, Tag, Download,
+  AlertTriangle, ExternalLink, Tag, Download, Table2, Save,
 } from 'lucide-react'
 import {
   ResponsiveContainer,
@@ -28,6 +28,8 @@ import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, 
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
 type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status' | 'runway'
+type SpreadsheetSortKey =
+  | 'name' | 'created' | 'cost' | 'price' | 'markedDown' | 'margin' | 'discount' | 'discountedPrice' | 'discountedMargin'
 type SortDir = 'asc' | 'desc'
 type StatusBadge = 'bestseller' | 'soldout' | 'stalled' | null
 
@@ -373,7 +375,7 @@ function StatusBadgePill({ badge }: { badge: StatusBadge }) {
   )
 }
 
-function SortableTh({
+function SortableTh<K extends string>({
   label,
   sortKeyValue,
   activeKey,
@@ -382,10 +384,10 @@ function SortableTh({
   align = 'right',
 }: {
   label: string
-  sortKeyValue: ProductSortKey
-  activeKey: ProductSortKey
+  sortKeyValue: K
+  activeKey: K
   dir: SortDir
-  onSort: (key: ProductSortKey) => void
+  onSort: (key: K) => void
   align?: 'left' | 'right'
 }) {
   const active = activeKey === sortKeyValue
@@ -1826,6 +1828,516 @@ function ProductRow({
   )
 }
 
+function manualCogsForRow(
+  p: ProductSummary,
+  cogsOverrides: Record<string, { sku: string; manualCogs: number }>,
+): number | null {
+  if (p.productId != null) {
+    const override = cogsOverrides[String(p.productId)]
+    if (override) return override.manualCogs
+  }
+  return p.cogs
+}
+
+function cogsForRow(
+  p: ProductSummary,
+  cogsOverrides: Record<string, { sku: string; manualCogs: number }>,
+): number | null {
+  return p.nativeCogs ?? manualCogsForRow(p, cogsOverrides)
+}
+
+function slugifyDiscountName(title: string, pct: number): string {
+  const slug = title.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 20)
+  return `${slug}${pct}`
+}
+
+// True once a variant's price has actually been marked down from its compare_at_price —
+// not just whenever compare_at_price happens to be set (Shopify allows one with no discount).
+function isMarkedDown(p: ProductSummary): boolean {
+  return p.compareAtPrice != null && p.price != null && p.compareAtPrice > p.price
+}
+
+// ─── Margin Spreadsheet tab — every product with a Shopify id, cost/price/margin at a
+// glance, and a what-if discount % column that recalculates price/margin live. The discount
+// input is scratch state until "Save" is clicked (persisted to product-discount-drafts.json);
+// Markdown and Create Discount are real Shopify writes, each behind its own inline confirm.
+function MarginSpreadsheet({
+  products,
+  shop,
+  currency,
+  locale,
+  cogsOverrides,
+  categoryFor,
+  onAssignCogs,
+  onCreateDiscount,
+  onMarkdown,
+  onRevertMarkdown,
+}: {
+  products: ProductSummary[]
+  shop: string | null
+  currency: string
+  locale: string
+  cogsOverrides: Record<string, { sku: string; manualCogs: number }>
+  categoryFor: (p: ProductSummary) => string | null
+  onAssignCogs: (productId: number, sku: string | null, cost: number | null) => void
+  onCreateDiscount: (
+    product: ProductSummary,
+    opts: { percentage: number; name: string; markdown: boolean },
+  ) => Promise<{ ok: boolean; message: string }>
+  onMarkdown: (product: ProductSummary, percentage: number) => Promise<{ ok: boolean; message: string }>
+  onRevertMarkdown: (product: ProductSummary) => Promise<{ ok: boolean; message: string }>
+}) {
+  const [discountDrafts, setDiscountDrafts] = useState<Record<string, number>>({})
+  const [loadingDrafts, setLoadingDrafts] = useState(true)
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [collectionFilter, setCollectionFilter] = useState('all')
+  const [sortKey, setSortKey] = useState<SpreadsheetSortKey>('name')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+
+  function handleSort(key: SpreadsheetSortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
+  const [confirmingMarkdownId, setConfirmingMarkdownId] = useState<number | null>(null)
+  const [markdownBusyId, setMarkdownBusyId] = useState<number | null>(null)
+  const [markdownResult, setMarkdownResult] = useState<Record<number, { ok: boolean; message: string }>>({})
+
+  const [confirmingRevertId, setConfirmingRevertId] = useState<number | null>(null)
+  const [revertBusyId, setRevertBusyId] = useState<number | null>(null)
+  const [revertResult, setRevertResult] = useState<Record<number, { ok: boolean; message: string }>>({})
+
+  const [confirmingDiscountId, setConfirmingDiscountId] = useState<number | null>(null)
+  const [discountNameById, setDiscountNameById] = useState<Record<number, string>>({})
+  const [discountBusyId, setDiscountBusyId] = useState<number | null>(null)
+  const [discountResult, setDiscountResult] = useState<Record<number, { ok: boolean; message: string }>>({})
+
+  useEffect(() => {
+    fetch('/api/shopify/product-discount-drafts')
+      .then((r) => r.json())
+      .then((d) => setDiscountDrafts(d.drafts ?? {}))
+      .finally(() => setLoadingDrafts(false))
+  }, [])
+
+  function setDiscountFor(productId: number, pct: number) {
+    setDiscountDrafts((prev) => ({ ...prev, [String(productId)]: pct }))
+    setDirty(true)
+  }
+
+  async function saveDrafts() {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const res = await fetch('/api/shopify/product-discount-drafts', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ drafts: discountDrafts }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setDirty(false)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const collectionOptions = useMemo(
+    () => [...new Set(products.map((p) => categoryFor(p) || 'Uncategorized'))].sort(),
+    [products, categoryFor],
+  )
+
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    let list = products.filter((p) => p.productId != null)
+    if (q) list = list.filter((p) => p.title.toLowerCase().includes(q))
+    if (collectionFilter !== 'all') {
+      list = list.filter((p) => (categoryFor(p) || 'Uncategorized') === collectionFilter)
+    }
+
+    const sorted = [...list]
+    sorted.sort((a, b) => {
+      let cmp = 0
+      switch (sortKey) {
+        case 'name':
+          cmp = a.title.localeCompare(b.title)
+          break
+        case 'created':
+          cmp = (a.createdAt ? new Date(a.createdAt).getTime() : -Infinity) -
+            (b.createdAt ? new Date(b.createdAt).getTime() : -Infinity)
+          break
+        case 'cost':
+          cmp = (cogsForRow(a, cogsOverrides) ?? -Infinity) - (cogsForRow(b, cogsOverrides) ?? -Infinity)
+          break
+        case 'price':
+          cmp = (a.price ?? -Infinity) - (b.price ?? -Infinity)
+          break
+        case 'markedDown':
+          cmp = Number(isMarkedDown(a)) - Number(isMarkedDown(b))
+          break
+        case 'margin': {
+          const am = marginAt(a.price, cogsForRow(a, cogsOverrides))?.amount ?? -Infinity
+          const bm = marginAt(b.price, cogsForRow(b, cogsOverrides))?.amount ?? -Infinity
+          cmp = am - bm
+          break
+        }
+        case 'discount':
+          cmp = (discountDrafts[String(a.productId)] ?? 0) - (discountDrafts[String(b.productId)] ?? 0)
+          break
+        case 'discountedPrice': {
+          const aPct = discountDrafts[String(a.productId)] ?? 0
+          const bPct = discountDrafts[String(b.productId)] ?? 0
+          const aPrice = a.price != null ? a.price * (1 - aPct / 100) : -Infinity
+          const bPrice = b.price != null ? b.price * (1 - bPct / 100) : -Infinity
+          cmp = aPrice - bPrice
+          break
+        }
+        case 'discountedMargin': {
+          const aPct = discountDrafts[String(a.productId)] ?? 0
+          const bPct = discountDrafts[String(b.productId)] ?? 0
+          const aPrice = a.price != null ? a.price * (1 - aPct / 100) : null
+          const bPrice = b.price != null ? b.price * (1 - bPct / 100) : null
+          const am = marginAt(aPrice, cogsForRow(a, cogsOverrides))?.amount ?? -Infinity
+          const bm = marginAt(bPrice, cogsForRow(b, cogsOverrides))?.amount ?? -Infinity
+          cmp = am - bm
+          break
+        }
+        default:
+          cmp = 0
+      }
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+    return sorted
+  }, [products, search, collectionFilter, categoryFor, sortKey, sortDir, cogsOverrides, discountDrafts])
+
+  if (loadingDrafts) return <LoadingSpinner label="Loading spreadsheet…" />
+
+  return (
+    // Breaks out of the page's own px-10 gutter (see page.tsx) — this tab's table benefits
+    // from the extra width more than any other section, so it alone reclaims that padding
+    // rather than widening the shared max-w-7xl container for every section.
+    <div className="bg-white rounded-2xl shadow-card p-5 -mx-10">
+      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 bg-cream-50 border border-sand-200 rounded-lg px-3 py-1.5 w-full max-w-xs">
+            <Search size={14} className="text-charcoal-300 shrink-0" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search products…"
+              className="w-full text-sm bg-transparent focus:outline-none text-charcoal-700 placeholder-charcoal-300"
+            />
+          </div>
+          <select
+            value={collectionFilter}
+            onChange={(e) => setCollectionFilter(e.target.value)}
+            className="px-3 py-2 text-sm border border-sand-300 rounded-lg bg-white text-charcoal-700 focus:outline-none focus:border-terracotta-400"
+          >
+            <option value="all">All Collections</option>
+            {collectionOptions.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-3">
+          {saveError && <span className="text-xs text-red-600">{saveError}</span>}
+          <button
+            onClick={saveDrafts}
+            disabled={saving || !dirty}
+            className="flex items-center gap-2 text-sm font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            {saved ? 'Saved' : 'Save'}
+          </button>
+        </div>
+      </div>
+
+      <div className="overflow-auto max-h-[70vh]">
+        <table className={`w-full text-sm border-separate border-spacing-0 ${COLUMN_BAND_CLASS}`}>
+          <thead className="sticky top-0 z-10 bg-white">
+            <tr className="text-xs text-charcoal-400 border-b border-sand-200">
+              <SortableTh label="Product" sortKeyValue="name" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="left" />
+              <SortableTh label="Date Added" sortKeyValue="created" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh label="Cost" sortKeyValue="cost" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh label="Price" sortKeyValue="price" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh label="Marked Down" sortKeyValue="markedDown" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh label="Margin" sortKeyValue="margin" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh label="Discount %" sortKeyValue="discount" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh label="Price at Discount" sortKeyValue="discountedPrice" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh label="Margin at Discount" sortKeyValue="discountedMargin" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <th className="pb-3 pl-4 text-left font-medium whitespace-nowrap">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((p, i) => {
+              const pid = p.productId as number
+              const cost = cogsForRow(p, cogsOverrides)
+              const manualCost = manualCogsForRow(p, cogsOverrides)
+              const price = p.price
+              const margin = marginAt(price, cost)
+              const markedDown = isMarkedDown(p)
+              const discountPct = discountDrafts[String(pid)] ?? 0
+              const discountedPrice = price != null ? price * (1 - discountPct / 100) : null
+              const discountedMargin = marginAt(discountedPrice, cost)
+
+              return (
+                <tr key={pid} className={zebraClass(i)}>
+                  <td className="py-3 pr-4">
+                    <div className="flex items-center gap-2">
+                      <ProductThumb imageUrl={p.imageUrl} title={p.title} />
+                      <div className="min-w-0 flex items-center gap-1">
+                        <p className="text-sm text-charcoal-700 truncate max-w-[220px]">{p.title}</p>
+                        {shop && (
+                          <a
+                            href={`https://${shop}/admin/products/${pid}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="View on Shopify"
+                            className="shrink-0 text-charcoal-300 hover:text-terracotta-500 transition-colors"
+                          >
+                            <ExternalLink size={11} />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-3 px-4 text-right text-charcoal-500 whitespace-nowrap">
+                    {formatDate(p.createdAt)}
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <CogsEditor
+                      productId={p.productId}
+                      sku={p.sku}
+                      nativeValue={p.nativeCogs}
+                      manualValue={manualCost}
+                      currency={currency}
+                      locale={locale}
+                      onAssign={onAssignCogs}
+                    />
+                  </td>
+                  <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">
+                    {price != null ? fmt(price, currency, locale) : '—'}
+                  </td>
+                  <td className="py-3 px-4 text-right whitespace-nowrap">
+                    {markedDown ? (
+                      <div className="flex flex-col items-end">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-terracotta-100 text-terracotta-700 border border-terracotta-200 whitespace-nowrap">
+                          Marked down
+                        </span>
+                        <span className="text-[10px] text-charcoal-400 mt-0.5">
+                          was {fmt(p.compareAtPrice as number, currency, locale)}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-charcoal-300">—</span>
+                    )}
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <MarginLabel margin={margin} currency={currency} locale={locale} />
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={95}
+                        value={discountPct === 0 ? '' : discountPct}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value)
+                          setDiscountFor(pid, Number.isFinite(v) ? Math.max(0, Math.min(95, Math.round(v))) : 0)
+                        }}
+                        placeholder="0"
+                        className="w-14 px-2 py-1 text-sm text-right border border-sand-300 rounded-lg focus:outline-none focus:border-terracotta-400"
+                      />
+                      <span className="text-xs text-charcoal-400">%</span>
+                    </div>
+                  </td>
+                  <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">
+                    {discountPct > 0 && discountedPrice != null ? fmt(discountedPrice, currency, locale) : '—'}
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    {discountPct > 0
+                      ? <MarginLabel margin={discountedMargin} currency={currency} locale={locale} />
+                      : <span className="text-xs text-charcoal-300">—</span>}
+                  </td>
+                  <td className="py-3 pl-4">
+                    <div className="flex flex-col gap-1.5 min-w-[160px]">
+                      {confirmingMarkdownId === pid ? (
+                        <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                          <p className="text-[11px] text-charcoal-700 mb-1.5">
+                            Set live price to{' '}
+                            <strong>{discountedPrice != null ? fmt(discountedPrice, currency, locale) : '—'}</strong> on
+                            Shopify?
+                          </p>
+                          <div className="flex gap-1.5">
+                            <button
+                              disabled={markdownBusyId === pid}
+                              onClick={async () => {
+                                setMarkdownBusyId(pid)
+                                const result = await onMarkdown(p, discountPct / 100)
+                                setMarkdownBusyId(null)
+                                setConfirmingMarkdownId(null)
+                                setMarkdownResult((prev) => ({ ...prev, [pid]: result }))
+                                if (result.ok) setDiscountFor(pid, 0)
+                              }}
+                              className="flex items-center gap-1 text-[11px] font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-2 py-1 rounded-md disabled:opacity-60"
+                            >
+                              {markdownBusyId === pid && <Loader2 size={10} className="animate-spin" />}
+                              Confirm
+                            </button>
+                            <button
+                              disabled={markdownBusyId === pid}
+                              onClick={() => setConfirmingMarkdownId(null)}
+                              className="text-[11px] text-charcoal-400 hover:text-charcoal-600 px-2 py-1"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmingMarkdownId(pid)}
+                          disabled={discountPct === 0 || price == null}
+                          title={discountPct === 0 ? 'Enter a discount % first' : undefined}
+                          className="flex items-center gap-1.5 text-xs font-medium text-charcoal-600 hover:text-terracotta-600 border border-sand-300 hover:border-terracotta-300 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <Pencil size={11} /> Markdown
+                        </button>
+                      )}
+                      {markdownResult[pid] && confirmingMarkdownId !== pid && (
+                        <p className={`text-[10px] ${markdownResult[pid].ok ? 'text-olive-600' : 'text-red-600'}`}>
+                          {markdownResult[pid].message}
+                        </p>
+                      )}
+
+                      {markedDown && (
+                        confirmingRevertId === pid ? (
+                          <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                            <p className="text-[11px] text-charcoal-700 mb-1.5">
+                              Restore live price to{' '}
+                              <strong>{fmt(p.compareAtPrice as number, currency, locale)}</strong> on Shopify?
+                            </p>
+                            <div className="flex gap-1.5">
+                              <button
+                                disabled={revertBusyId === pid}
+                                onClick={async () => {
+                                  setRevertBusyId(pid)
+                                  const result = await onRevertMarkdown(p)
+                                  setRevertBusyId(null)
+                                  setConfirmingRevertId(null)
+                                  setRevertResult((prev) => ({ ...prev, [pid]: result }))
+                                }}
+                                className="flex items-center gap-1 text-[11px] font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-2 py-1 rounded-md disabled:opacity-60"
+                              >
+                                {revertBusyId === pid && <Loader2 size={10} className="animate-spin" />}
+                                Confirm
+                              </button>
+                              <button
+                                disabled={revertBusyId === pid}
+                                onClick={() => setConfirmingRevertId(null)}
+                                className="text-[11px] text-charcoal-400 hover:text-charcoal-600 px-2 py-1"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmingRevertId(pid)}
+                            className="flex items-center gap-1.5 text-xs font-medium text-charcoal-600 hover:text-terracotta-600 border border-sand-300 hover:border-terracotta-300 px-2.5 py-1 rounded-lg transition-colors"
+                          >
+                            <RefreshCw size={11} /> Revert Markdown
+                          </button>
+                        )
+                      )}
+                      {revertResult[pid] && confirmingRevertId !== pid && (
+                        <p className={`text-[10px] ${revertResult[pid].ok ? 'text-olive-600' : 'text-red-600'}`}>
+                          {revertResult[pid].message}
+                        </p>
+                      )}
+
+                      {confirmingDiscountId === pid ? (
+                        <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                          <input
+                            type="text"
+                            value={discountNameById[pid] ?? ''}
+                            onChange={(e) => setDiscountNameById((prev) => ({ ...prev, [pid]: e.target.value }))}
+                            className="w-full mb-1.5 px-2 py-1 text-[11px] border border-sand-300 rounded-md focus:outline-none focus:border-terracotta-400"
+                          />
+                          <div className="flex gap-1.5">
+                            <button
+                              disabled={discountBusyId === pid || !(discountNameById[pid] ?? '').trim()}
+                              onClick={async () => {
+                                setDiscountBusyId(pid)
+                                const result = await onCreateDiscount(p, {
+                                  percentage: discountPct / 100,
+                                  name: (discountNameById[pid] ?? '').trim(),
+                                  markdown: false,
+                                })
+                                setDiscountBusyId(null)
+                                setConfirmingDiscountId(null)
+                                setDiscountResult((prev) => ({ ...prev, [pid]: result }))
+                              }}
+                              className="flex items-center gap-1 text-[11px] font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-2 py-1 rounded-md disabled:opacity-60"
+                            >
+                              {discountBusyId === pid && <Loader2 size={10} className="animate-spin" />}
+                              Confirm
+                            </button>
+                            <button
+                              disabled={discountBusyId === pid}
+                              onClick={() => setConfirmingDiscountId(null)}
+                              className="text-[11px] text-charcoal-400 hover:text-charcoal-600 px-2 py-1"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setDiscountNameById((prev) => ({ ...prev, [pid]: slugifyDiscountName(p.title, discountPct) }))
+                            setConfirmingDiscountId(pid)
+                          }}
+                          disabled={discountPct === 0}
+                          title={discountPct === 0 ? 'Enter a discount % first' : undefined}
+                          className="flex items-center gap-1.5 text-xs font-medium text-charcoal-600 hover:text-terracotta-600 border border-sand-300 hover:border-terracotta-300 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <Tag size={11} /> Create Discount
+                        </button>
+                      )}
+                      {discountResult[pid] && confirmingDiscountId !== pid && (
+                        <p className={`text-[10px] ${discountResult[pid].ok ? 'text-olive-600' : 'text-red-600'}`}>
+                          {discountResult[pid].message}
+                        </p>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {rows.length === 0 && (
+        <p className="text-sm text-charcoal-400 italic py-8 text-center">No products match your search.</p>
+      )}
+    </div>
+  )
+}
+
 export default function ProductsInventory({
   openProductId,
   onOpenProductHandled,
@@ -1855,6 +2367,10 @@ export default function ProductsInventory({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const { includeDummy } = useDummyData()
+
+  // Overview (KPI cards + main table) vs. the Margin Spreadsheet tab — same in-page tab
+  // pattern CustomerService uses, since this app has no sidebar-submenu precedent.
+  const [tab, setTab] = useState<'overview' | 'spreadsheet'>('overview')
 
   // KPI filter + toolbar
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>('all')
@@ -2385,6 +2901,43 @@ export default function ProductsInventory({
     }
   }
 
+  async function handleMarkdownProduct(
+    product: ProductSummary,
+    percentage: number,
+  ): Promise<{ ok: boolean; message: string }> {
+    if (product.productId == null) {
+      return { ok: false, message: 'Missing product id.' }
+    }
+    try {
+      const res = await fetch(`/api/shopify/products/${product.productId}/markdown`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ percentage }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      await load()
+      return { ok: true, message: `Price marked down on Shopify (${data.variantsUpdated} variant${data.variantsUpdated === 1 ? '' : 's'} updated)` }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : 'Failed to mark down price' }
+    }
+  }
+
+  async function handleRevertMarkdown(product: ProductSummary): Promise<{ ok: boolean; message: string }> {
+    if (product.productId == null) {
+      return { ok: false, message: 'Missing product id.' }
+    }
+    try {
+      const res = await fetch(`/api/shopify/products/${product.productId}/revert-markdown`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      await load()
+      return { ok: true, message: `Price restored on Shopify (${data.variantsReverted} variant${data.variantsReverted === 1 ? '' : 's'} reverted)` }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : 'Failed to revert markdown' }
+    }
+  }
+
   async function handleCreateSegment(product: ProductSummary, emails: string[]): Promise<{ ok: boolean; message: string }> {
     if (product.productId == null || emails.length === 0) {
       return { ok: false, message: 'No consented customers to create a segment for.' }
@@ -2450,13 +3003,31 @@ export default function ProductsInventory({
 
   const stalledSummary = useMemo(() => {
     const list = products.filter((p) => isStalled(p, STALLED_DAYS))
+    let missingCostCount = 0
     const value = list.reduce((s, p) => {
       const cost = cogsFor(p)
-      return cost != null ? s + (p.inventoryQuantity ?? 0) * cost : s
+      if (cost == null) {
+        missingCostCount++
+        return s
+      }
+      return s + (p.inventoryQuantity ?? 0) * cost
     }, 0)
-    return { ...getStalledUnitsSummary(products), value }
+    return { ...getStalledUnitsSummary(products), value, missingCostCount, stalledCount: list.length }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [products, cogsOverrides])
+
+  const stalledCostBasisSub =
+    stalledSummary.missingCostCount === 0
+      ? `Cost basis ${money(stalledSummary.value)} · Potential revenue ${money(stalledSummary.potentialRevenue)}`
+      : stalledSummary.missingCostCount === stalledSummary.stalledCount
+        ? `Cost basis not available yet · Potential revenue ${money(stalledSummary.potentialRevenue)}`
+        : `Cost basis ${money(stalledSummary.value)} (missing for ${stalledSummary.missingCostCount} of ${stalledSummary.stalledCount} products) · Potential revenue ${money(stalledSummary.potentialRevenue)}`
+
+  const stalledCostBasisFootnote =
+    `Stalled = no sale in over ${STALLED_DAYS} days. Potential revenue = full-price sell-through of on-hand stock.` +
+    (stalledSummary.missingCostCount > 0
+      ? ' Add a cost per unit on a product below ("+ add cost") to include it here.'
+      : '')
 
   const bestSellerIds = useMemo(() => {
     const top = [...products]
@@ -2652,14 +3223,32 @@ export default function ProductsInventory({
             {source === 'catalog' ? 'Your full product catalog' : 'Products sold in the last 12 months'}
           </p>
         </div>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="flex items-center gap-2 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-terracotta-100 disabled:opacity-50"
-        >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 bg-sand-100 rounded-xl p-1">
+            <button
+              onClick={() => setTab('overview')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
+                ${tab === 'overview' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
+            >
+              <Boxes size={13} /> Overview
+            </button>
+            <button
+              onClick={() => setTab('spreadsheet')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
+                ${tab === 'spreadsheet' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
+            >
+              <Table2 size={13} /> Spreadsheet
+            </button>
+          </div>
+          <button
+            onClick={load}
+            disabled={loading}
+            className="flex items-center gap-2 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-terracotta-100 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {loading && <LoadingSpinner label="Pulling product data…" />}
@@ -2700,7 +3289,7 @@ export default function ProductsInventory({
         </div>
       )}
 
-      {!loading && !error && inventoryAvailable && products.length > 0 && (
+      {tab === 'overview' && !loading && !error && inventoryAvailable && products.length > 0 && (
         <>
           {/* ─── KPI strip (client-side filter, no navigation) ────────────── */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -2724,8 +3313,8 @@ export default function ProductsInventory({
               icon={<Clock size={12} />}
               label="Stalled Inventory"
               value={`${stalledSummary.units.toLocaleString()} units`}
-              sub={`Cost basis ${money(stalledSummary.value)} · Potential revenue ${money(stalledSummary.potentialRevenue)}`}
-              footnote={`Stalled = no sale in over ${STALLED_DAYS} days. Potential revenue = full-price sell-through of on-hand stock.`}
+              sub={stalledCostBasisSub}
+              footnote={stalledCostBasisFootnote}
               active={activeFilter === 'stalled'}
               onClick={() => setActiveFilter((f) => (f === 'stalled' ? 'all' : 'stalled'))}
             />
@@ -2919,6 +3508,21 @@ export default function ProductsInventory({
             </div>
           )}
         </>
+      )}
+
+      {tab === 'spreadsheet' && !loading && !error && inventoryAvailable && products.length > 0 && (
+        <MarginSpreadsheet
+          products={products}
+          shop={shop}
+          currency={currency}
+          locale={locale}
+          cogsOverrides={cogsOverrides}
+          categoryFor={categoryFor}
+          onAssignCogs={handleCogsAssigned}
+          onCreateDiscount={handleCreateDiscount}
+          onMarkdown={handleMarkdownProduct}
+          onRevertMarkdown={handleRevertMarkdown}
+        />
       )}
     </section>
   )

@@ -68,6 +68,18 @@ Known limitation: Instagram gives no email address, so the customer-context look
 
 **Current status: code-complete but not yet connected.** `/api/instagram/status` (shown on the Integrations tab, `src/components/sections/Integrations.tsx`) reports `hasIGAuth()` — false until the one-time OAuth "Connect" step completes. That step is blocked locally: Meta's Instagram Login requires an HTTPS redirect URI, and local dev only serves plain HTTP. The OAuth flow, scopes, and messaging calls have all been verified working against the real Meta app (including a live test of `graph.instagram.com` conversations with a real token) — what's missing is just an HTTPS-capable environment (a deployment, or a stable local tunnel) to click through the connect step once.
 
+### Margin Spreadsheet (Products & Inventory)
+A second "Spreadsheet" tab in `ProductsInventory.tsx`, alongside the existing "Overview" tab (KPI cards + main table) — same in-page-tab pattern as Customer Service's Tickets/Instagram/Tags/Macros/Agent tabs, since this app has no sidebar-submenu precedent. Both tabs are plain local `useState` in `ProductsInventory`; no `Sidebar.tsx`/`page.tsx` changes.
+
+Lists every product with a Shopify id (cost, price, margin) plus a per-row discount % input that recalculates price/margin at that discount live, client-side, with no network call. The discount % is scratch "what-if" state — it is **not** autosaved; a single "Save" button persists the entire current set of row discount %s in one write to `data/product-discount-drafts.json` via `GET`/`PUT /api/shopify/product-discount-drafts` (`readProductDiscountDrafts()`/`writeProductDiscountDrafts()` in `product-discount-drafts-storage.ts`). Reloading before Save discards unsaved edits.
+
+A "Marked Down" column shows whether the product is currently on sale — true when the first variant's `compareAtPrice` (Shopify's `compare_at_price`, added to `ProductSummary`/`ShopifyProductVariant` for this) is set and higher than its current `price` (`isMarkedDown()` in `ProductsInventory.tsx`). Shows the pre-markdown ("was") price alongside the badge; both this column and every other column are sortable via the shared `SortableTh` (generalized to a generic `<K extends string>` key so both tabs' distinct sort-key unions can reuse it).
+
+Each row has three independent Shopify write actions, all behind an inline confirm (no modal):
+- **Markdown** — directly overwrites the product's live price via `markdownProductVariants()` (`src/lib/shopify-discounts.ts`), called through the dedicated `POST /api/shopify/products/[id]/markdown` route. Writes via `PUT /products/{id}.json`, i.e. the already-confirmed `write_products` scope — not `write_discounts` — so this action doesn't depend on the pending discount-scope reconnect below. On success the row's discount resets to 0 (it's now baked into the real price) and the full product list is refetched.
+- **Revert Markdown** — the inverse: `revertMarkdown()` (same file), via `POST /api/shopify/products/[id]/revert-markdown`, restores price from `compare_at_price` and clears it. Only shown when the row is currently marked down. Also just `write_products`.
+- **Create Discount** — creates a real Shopify discount code via the existing `create-discount` route (called with `markdown: false`), reusing `createProductDiscountCode()` unchanged. Needs `write_discounts`, which per the Auth section above is not yet confirmed granted — may 403 until an OAuth reconnect; the raw error is surfaced rather than masked.
+
 ### Data storage (JSON files — no DB)
 | File | Owned by | Contents |
 |---|---|---|
@@ -76,6 +88,7 @@ Known limitation: Instagram gives no email address, so the customer-context look
 | `data/product-categories.json` | `src/lib/product-categories-storage.ts` | `{ "Product Title": "Category" }` |
 | `data/product-fit-notes.json` | `src/lib/product-fit-notes-storage.ts` | `{ productId: { text, status: 'draft'\|'published', updatedAt } }` — draft state + mirror of the published `custom.fit_note` metafield |
 | `data/product-preorders.json` | `src/lib/product-preorders-storage.ts` | `{ productId: { text, status: 'draft'\|'published', updatedAt } }` — draft state + mirror of the published `custom.preorder` metafield |
+| `data/product-discount-drafts.json` | `src/lib/product-discount-drafts-storage.ts` | `{ productId: discountPercent }` — scratch discount % per product staged in the Products & Inventory "Spreadsheet" tab, only written when its "Save" button is clicked |
 | `data/tickets.json` | `src/lib/cs-storage.ts` | CS ticket array |
 | `data/macros.json` | `src/lib/cs-storage.ts` | CS macro array |
 | `data/agent-guidance.json` | `src/lib/cs-storage.ts` | `{ agentName, toneOfVoice, standardMessage, notes: [{ id, title, body, createdAt, updatedAt? }] }` — standing instructions for "Draft with AI" |

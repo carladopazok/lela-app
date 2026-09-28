@@ -293,6 +293,7 @@ export interface ProductSummary {
   publishedAt: string | null      // null = not live on the Online Store channel
   createdAt: string | null        // Shopify product created_at — fallback reference for stalled calc when never sold
   price: number | null            // first variant price
+  compareAtPrice: number | null   // first variant compare_at_price — set (with price lower than it) when the product is currently marked down
   lastSoldAt: string | null       // most recent order date seen for this title, null if never sold
   cogs: number | null             // manually entered cost, from data/product-cogs.json, keyed by product id
   nativeCogs: number | null       // Shopify's "Cost per item" (InventoryItem.cost), first variant
@@ -349,6 +350,7 @@ export interface ShopifyProductVariant {
   id: number
   title: string
   price: string
+  compare_at_price: string | null
   inventory_quantity: number | null
   sku: string
   inventory_item_id: number
