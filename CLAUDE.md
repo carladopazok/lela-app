@@ -80,6 +80,13 @@ Each row has three independent Shopify write actions, all behind an inline confi
 - **Revert Markdown** — the inverse: `revertMarkdown()` (same file), via `POST /api/shopify/products/[id]/revert-markdown`, restores price from `compare_at_price` and clears it. Only shown when the row is currently marked down. Also just `write_products`.
 - **Create Discount** — creates a real Shopify discount code via the existing `create-discount` route (called with `markdown: false`), reusing `createProductDiscountCode()` unchanged. Needs `write_discounts`, which per the Auth section above is not yet confirmed granted — may 403 until an OAuth reconnect; the raw error is surfaced rather than masked.
 
+### Cost Breakdown (Products & Inventory)
+A third "Cost Breakdown" tab (`CostBreakdownSheet` in `ProductsInventory.tsx`) with one hand-entered per-unit € input per product for each of Fabric, Beads, Garment, Printing, Painting, Canvas, Label, Hand work, Shipping and Shopify Monthly (the list is `COST_COMPONENTS` in `src/lib/cost-breakdown.ts`, which is client-safe and has no `fs`). **Total Cost** is always calculated (`breakdownTotal()`: filled fields summed, blanks = 0, `null` if nothing is filled) and never typed in. Same Save-the-whole-sheet pattern as the discount drafts: `GET`/`PUT /api/shopify/product-cost-breakdown`.
+
+**Cost precedence:** if a product has any breakdown field filled in, its breakdown total becomes the product's cost everywhere (Margin, Margin at Discount, Cost Basis at Risk, the Stalled KPI, the CSV export). Otherwise the cost falls back to Shopify's Cost per item, then the manual cost (`product-cogs.json`). This lives in two resolvers that must stay in sync: `cogsForRow()` (module-level, used by the Spreadsheet) and `cogsFor()` (inside `ProductsInventory`).
+
+**Linked tabs:** the Spreadsheet's column is labelled "Total Cost". When a product has a breakdown, that cell is a link whose tooltip lists the parts, and it also shows "Shopify: €X" if Shopify's Cost per item differs. Otherwise the cell shows the usual `CogsEditor` plus a "+ breakdown" link. Either link switches to Cost Breakdown and scrolls to and highlights that row. The icon next to each product name in Cost Breakdown jumps back. The sheet stays mounted (hidden) while you're on other tabs, so unsaved edits survive a round trip.
+
 ### Data storage (JSON files — no DB)
 | File | Owned by | Contents |
 |---|---|---|
@@ -89,6 +96,7 @@ Each row has three independent Shopify write actions, all behind an inline confi
 | `data/product-fit-notes.json` | `src/lib/product-fit-notes-storage.ts` | `{ productId: { text, status: 'draft'\|'published', updatedAt } }` — draft state + mirror of the published `custom.fit_note` metafield |
 | `data/product-preorders.json` | `src/lib/product-preorders-storage.ts` | `{ productId: { text, status: 'draft'\|'published', updatedAt } }` — draft state + mirror of the published `custom.preorder` metafield |
 | `data/product-final-sale.json` | `src/lib/product-final-sale-storage.ts` | `{ productId: { text, status: 'draft'\|'published', updatedAt } }` — draft state + mirror of the published `custom.final_sale` metafield |
+| `data/product-cost-breakdown.json` | `src/lib/product-cost-breakdown-storage.ts` | `{ productId: { fabric?, beads?, garment?, printing?, painting?, canvas?, label?, handWork?, shipping?, shopifyMonthly? } }` — per-unit € cost components from the "Cost Breakdown" tab; their sum overrides Shopify's Cost per item |
 | `data/product-discount-drafts.json` | `src/lib/product-discount-drafts-storage.ts` | `{ productId: discountPercent }` — scratch discount % per product staged in the Products & Inventory "Spreadsheet" tab, only written when its "Save" button is clicked |
 | `data/tickets.json` | `src/lib/cs-storage.ts` | CS ticket array |
 | `data/macros.json` | `src/lib/cs-storage.ts` | CS macro array |

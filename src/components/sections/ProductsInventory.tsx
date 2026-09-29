@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   RefreshCw, AlertCircle, Package, Check, X, Info, Boxes, XCircle, Clock, Mail, Loader2,
   Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, ArrowLeft, Users,
-  AlertTriangle, ExternalLink, Tag, Download, Table2, Save,
+  AlertTriangle, ExternalLink, Tag, Download, Table2, Save, Calculator, CornerUpLeft,
 } from 'lucide-react'
 import {
   ResponsiveContainer,
@@ -24,6 +24,7 @@ import {
 } from '@/lib/product-metrics'
 import { QUALIFYING_RETURN_REASONS } from '@/lib/shopify-returns'
 import { LOW_STOCK_TAG, RESTOCK_EARLY_TAG, type ToggleableProductTag } from '@/lib/product-tags'
+import { COST_COMPONENTS, breakdownTotal, type CostBreakdownEntry, type CostComponentKey } from '@/lib/cost-breakdown'
 import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry, PreorderEntry, FinalSaleEntry } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
@@ -31,6 +32,7 @@ type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhan
 type SpreadsheetSortKey =
   | 'name' | 'created' | 'stock' | 'unitsSold' | 'cost' | 'price' | 'markedDown' | 'margin' | 'discount'
   | 'discountedPrice' | 'discountedMargin'
+type CostBreakdownSortKey = 'name' | CostComponentKey | 'total'
 type SortDir = 'asc' | 'desc'
 type StatusBadge = 'bestseller' | 'soldout' | 'stalled' | null
 
@@ -2012,11 +2014,15 @@ function manualCogsForRow(
   return p.cogs
 }
 
+// Cost precedence: a filled-in Cost Breakdown total wins, then Shopify's "Cost per item",
+// then the manual cost — keep in sync with cogsFor() in ProductsInventory.
 function cogsForRow(
   p: ProductSummary,
   cogsOverrides: Record<string, { sku: string; manualCogs: number }>,
+  costBreakdown: Record<string, CostBreakdownEntry>,
 ): number | null {
-  return p.nativeCogs ?? manualCogsForRow(p, cogsOverrides)
+  const fromBreakdown = p.productId != null ? breakdownTotal(costBreakdown[String(p.productId)]) : null
+  return fromBreakdown ?? p.nativeCogs ?? manualCogsForRow(p, cogsOverrides)
 }
 
 function slugifyDiscountName(title: string, pct: number): string {
@@ -2040,8 +2046,10 @@ function MarginSpreadsheet({
   currency,
   locale,
   cogsOverrides,
+  costBreakdown,
   categoryFor,
   onAssignCogs,
+  onOpenBreakdown,
   onCreateDiscount,
   onMarkdown,
   onRevertMarkdown,
@@ -2051,7 +2059,9 @@ function MarginSpreadsheet({
   currency: string
   locale: string
   cogsOverrides: Record<string, { sku: string; manualCogs: number }>
+  costBreakdown: Record<string, CostBreakdownEntry>
   categoryFor: (p: ProductSummary) => string | null
+  onOpenBreakdown: (productId: number) => void
   onAssignCogs: (productId: number, sku: string | null, cost: number | null) => void
   onCreateDiscount: (
     product: ProductSummary,
@@ -2157,7 +2167,7 @@ function MarginSpreadsheet({
           cmp = a.unitsSold - b.unitsSold
           break
         case 'cost':
-          cmp = (cogsForRow(a, cogsOverrides) ?? -Infinity) - (cogsForRow(b, cogsOverrides) ?? -Infinity)
+          cmp = (cogsForRow(a, cogsOverrides, costBreakdown) ?? -Infinity) - (cogsForRow(b, cogsOverrides, costBreakdown) ?? -Infinity)
           break
         case 'price':
           cmp = (a.price ?? -Infinity) - (b.price ?? -Infinity)
@@ -2166,8 +2176,8 @@ function MarginSpreadsheet({
           cmp = Number(isMarkedDown(a)) - Number(isMarkedDown(b))
           break
         case 'margin': {
-          const am = marginAt(a.price, cogsForRow(a, cogsOverrides))?.amount ?? -Infinity
-          const bm = marginAt(b.price, cogsForRow(b, cogsOverrides))?.amount ?? -Infinity
+          const am = marginAt(a.price, cogsForRow(a, cogsOverrides, costBreakdown))?.amount ?? -Infinity
+          const bm = marginAt(b.price, cogsForRow(b, cogsOverrides, costBreakdown))?.amount ?? -Infinity
           cmp = am - bm
           break
         }
@@ -2187,8 +2197,8 @@ function MarginSpreadsheet({
           const bPct = discountDrafts[String(b.productId)] ?? 0
           const aPrice = a.price != null ? a.price * (1 - aPct / 100) : null
           const bPrice = b.price != null ? b.price * (1 - bPct / 100) : null
-          const am = marginAt(aPrice, cogsForRow(a, cogsOverrides))?.amount ?? -Infinity
-          const bm = marginAt(bPrice, cogsForRow(b, cogsOverrides))?.amount ?? -Infinity
+          const am = marginAt(aPrice, cogsForRow(a, cogsOverrides, costBreakdown))?.amount ?? -Infinity
+          const bm = marginAt(bPrice, cogsForRow(b, cogsOverrides, costBreakdown))?.amount ?? -Infinity
           cmp = am - bm
           break
         }
@@ -2198,7 +2208,7 @@ function MarginSpreadsheet({
       return sortDir === 'asc' ? cmp : -cmp
     })
     return sorted
-  }, [products, search, collectionFilter, categoryFor, sortKey, sortDir, cogsOverrides, discountDrafts])
+  }, [products, search, collectionFilter, categoryFor, sortKey, sortDir, cogsOverrides, costBreakdown, discountDrafts])
 
   if (loadingDrafts) return <LoadingSpinner label="Loading spreadsheet…" />
 
@@ -2251,7 +2261,7 @@ function MarginSpreadsheet({
               <SortableTh label="Date Added" sortKeyValue="created" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Units in Stock" sortKeyValue="stock" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Units Sold" sortKeyValue="unitsSold" activeKey={sortKey} dir={sortDir} onSort={handleSort} title="Trailing 12 months" />
-              <SortableTh label="Cost" sortKeyValue="cost" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh label="Total Cost" sortKeyValue="cost" activeKey={sortKey} dir={sortDir} onSort={handleSort} title="Cost Breakdown total when filled in, otherwise Shopify's Cost per item or the manual cost" />
               <SortableTh label="Price" sortKeyValue="price" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Marked Down" sortKeyValue="markedDown" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Margin" sortKeyValue="margin" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
@@ -2264,8 +2274,10 @@ function MarginSpreadsheet({
           <tbody>
             {rows.map((p, i) => {
               const pid = p.productId as number
-              const cost = cogsForRow(p, cogsOverrides)
+              const cost = cogsForRow(p, cogsOverrides, costBreakdown)
               const manualCost = manualCogsForRow(p, cogsOverrides)
+              const breakdown = costBreakdown[String(pid)]
+              const breakdownCost = breakdownTotal(breakdown)
               const price = p.price
               const margin = marginAt(price, cost)
               const markedDown = isMarkedDown(p)
@@ -2304,15 +2316,47 @@ function MarginSpreadsheet({
                     {p.unitsSold.toLocaleString()}
                   </td>
                   <td className="py-3 px-4 text-right">
-                    <CogsEditor
-                      productId={p.productId}
-                      sku={p.sku}
-                      nativeValue={p.nativeCogs}
-                      manualValue={manualCost}
-                      currency={currency}
-                      locale={locale}
-                      onAssign={onAssignCogs}
-                    />
+                    {breakdownCost != null ? (
+                      <div className="flex flex-col items-end">
+                        <button
+                          onClick={() => onOpenBreakdown(pid)}
+                          title={COST_COMPONENTS
+                            .filter((c) => typeof breakdown?.[c.key] === 'number')
+                            .map((c) => `${c.label} ${fmt(breakdown?.[c.key] as number, currency, locale)}`)
+                            .join(' · ')}
+                          className="inline-flex items-center gap-1 text-sm font-medium text-terracotta-600 hover:text-terracotta-700 underline decoration-dotted underline-offset-2 whitespace-nowrap"
+                        >
+                          <Calculator size={11} />
+                          {fmt(breakdownCost, currency, locale)}
+                        </button>
+                        {p.nativeCogs != null && Math.abs(p.nativeCogs - breakdownCost) >= 0.005 && (
+                          <span
+                            className="text-[10px] text-charcoal-400 mt-0.5 whitespace-nowrap"
+                            title="Shopify's Cost per item differs — the Cost Breakdown total is used instead"
+                          >
+                            Shopify: {fmt(p.nativeCogs, currency, locale)}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-end gap-0.5">
+                        <CogsEditor
+                          productId={p.productId}
+                          sku={p.sku}
+                          nativeValue={p.nativeCogs}
+                          manualValue={manualCost}
+                          currency={currency}
+                          locale={locale}
+                          onAssign={onAssignCogs}
+                        />
+                        <button
+                          onClick={() => onOpenBreakdown(pid)}
+                          className="text-[10px] text-charcoal-400 hover:text-terracotta-500 transition-colors whitespace-nowrap"
+                        >
+                          + breakdown
+                        </button>
+                      </div>
+                    )}
                   </td>
                   <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">
                     {price != null ? fmt(price, currency, locale) : '—'}
@@ -2525,6 +2569,301 @@ function MarginSpreadsheet({
   )
 }
 
+// ─── Cost Breakdown tab — per-unit cost components (fabric, beads, labor, shipping, …) entered
+// by hand for every product, summed into a Total Cost that overrides Shopify's "Cost per item"
+// everywhere margins are computed. Linked both ways with the Margin Spreadsheet's Total Cost
+// column. Edits are held locally (as strings, so partially typed decimals aren't reformatted)
+// until "Save" writes the whole sheet to product-cost-breakdown.json. Kept mounted while hidden
+// so jumping to the Spreadsheet tab and back doesn't discard unsaved edits.
+type CostBreakdownEdits = Record<string, Partial<Record<CostComponentKey, string>>>
+
+function toEdits(breakdown: Record<string, CostBreakdownEntry>): CostBreakdownEdits {
+  const out: CostBreakdownEdits = {}
+  for (const [pid, entry] of Object.entries(breakdown)) {
+    const row: Partial<Record<CostComponentKey, string>> = {}
+    for (const c of COST_COMPONENTS) {
+      const v = entry[c.key]
+      if (typeof v === 'number') row[c.key] = String(v)
+    }
+    out[pid] = row
+  }
+  return out
+}
+
+function parseComponent(raw: string | undefined): number | null {
+  if (raw == null || raw.trim() === '') return null
+  const v = parseFloat(raw)
+  return Number.isFinite(v) && v >= 0 ? v : null
+}
+
+function editsToEntry(row: Partial<Record<CostComponentKey, string>> | undefined): CostBreakdownEntry {
+  const entry: CostBreakdownEntry = {}
+  if (!row) return entry
+  for (const c of COST_COMPONENTS) {
+    const v = parseComponent(row[c.key])
+    if (v != null) entry[c.key] = v
+  }
+  return entry
+}
+
+function CostBreakdownSheet({
+  products,
+  shop,
+  currency,
+  locale,
+  active,
+  costBreakdown,
+  focusRequest,
+  categoryFor,
+  onSaved,
+  onOpenSpreadsheet,
+}: {
+  products: ProductSummary[]
+  shop: string | null
+  currency: string
+  locale: string
+  active: boolean
+  costBreakdown: Record<string, CostBreakdownEntry>
+  focusRequest: { productId: number; nonce: number } | null
+  categoryFor: (p: ProductSummary) => string | null
+  onSaved: (breakdown: Record<string, CostBreakdownEntry>) => void
+  onOpenSpreadsheet: () => void
+}) {
+  const [edits, setEdits] = useState<CostBreakdownEdits>(() => toEdits(costBreakdown))
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [collectionFilter, setCollectionFilter] = useState('all')
+  const [sortKey, setSortKey] = useState<CostBreakdownSortKey>('name')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [highlightId, setHighlightId] = useState<number | null>(null)
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({})
+
+  // Parent reloaded (Refresh) with nothing unsaved here — pick up the fresh saved values.
+  useEffect(() => {
+    if (!dirty) setEdits(toEdits(costBreakdown))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [costBreakdown])
+
+  // Jump-to-row from the Spreadsheet tab: clear filters so the row is guaranteed to be listed,
+  // then scroll to it once the tab is actually visible, and flash a highlight.
+  useEffect(() => {
+    if (!focusRequest) return
+    setSearch('')
+    setCollectionFilter('all')
+    setHighlightId(focusRequest.productId)
+    const t = setTimeout(() => setHighlightId(null), 2500)
+    return () => clearTimeout(t)
+  }, [focusRequest])
+
+  useEffect(() => {
+    if (!active || !focusRequest) return
+    const el = rowRefs.current[focusRequest.productId]
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    el?.querySelector('input')?.focus({ preventScroll: true })
+  }, [active, focusRequest, search, collectionFilter])
+
+  function handleSort(key: CostBreakdownSortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
+  function setComponent(productId: number, key: CostComponentKey, raw: string) {
+    setEdits((prev) => ({ ...prev, [String(productId)]: { ...prev[String(productId)], [key]: raw } }))
+    setDirty(true)
+  }
+
+  async function save() {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const breakdown: Record<string, CostBreakdownEntry> = {}
+      for (const [pid, row] of Object.entries(edits)) {
+        const entry = editsToEntry(row)
+        if (Object.keys(entry).length > 0) breakdown[pid] = entry
+      }
+      const res = await fetch('/api/shopify/product-cost-breakdown', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ breakdown }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setDirty(false)
+      setEdits(toEdits(data.breakdown ?? {}))
+      onSaved(data.breakdown ?? {})
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const collectionOptions = useMemo(
+    () => [...new Set(products.map((p) => categoryFor(p) || 'Uncategorized'))].sort(),
+    [products, categoryFor],
+  )
+
+  // Sorted by the last *saved* values, not live edits — otherwise a row would jump away
+  // from under the cursor mid-typing whenever the active sort column is being edited.
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    let list = products.filter((p) => p.productId != null)
+    if (q) list = list.filter((p) => p.title.toLowerCase().includes(q))
+    if (collectionFilter !== 'all') {
+      list = list.filter((p) => (categoryFor(p) || 'Uncategorized') === collectionFilter)
+    }
+    const valueFor = (p: ProductSummary): number => {
+      const entry = costBreakdown[String(p.productId)]
+      if (sortKey === 'total') return breakdownTotal(entry) ?? -Infinity
+      if (sortKey === 'name') return 0
+      return entry?.[sortKey] ?? -Infinity
+    }
+    const sorted = [...list]
+    sorted.sort((a, b) => {
+      const cmp = sortKey === 'name' ? a.title.localeCompare(b.title) : valueFor(a) - valueFor(b)
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+    return sorted
+  }, [products, search, collectionFilter, categoryFor, sortKey, sortDir, costBreakdown])
+
+  return (
+    <div className="bg-white rounded-2xl shadow-card p-5 -mx-10">
+      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 bg-cream-50 border border-sand-200 rounded-lg px-3 py-1.5 w-full max-w-xs">
+            <Search size={14} className="text-charcoal-300 shrink-0" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search products…"
+              className="w-full text-sm bg-transparent focus:outline-none text-charcoal-700 placeholder-charcoal-300"
+            />
+          </div>
+          <select
+            value={collectionFilter}
+            onChange={(e) => setCollectionFilter(e.target.value)}
+            className="px-3 py-2 text-sm border border-sand-300 rounded-lg bg-white text-charcoal-700 focus:outline-none focus:border-terracotta-400"
+          >
+            <option value="all">All Collections</option>
+            {collectionOptions.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <p className="text-xs text-charcoal-400 max-w-md">
+            Per-unit costs. Blanks count as 0. When any field is filled, Total Cost replaces Shopify&apos;s
+            Cost per item in every margin calculation.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {dirty && !saving && <span className="text-xs text-amber-600">Unsaved changes</span>}
+          {saveError && <span className="text-xs text-red-600">{saveError}</span>}
+          <button
+            onClick={save}
+            disabled={saving || !dirty}
+            className="flex items-center gap-2 text-sm font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            {saved ? 'Saved' : 'Save'}
+          </button>
+        </div>
+      </div>
+
+      <div className="overflow-auto max-h-[70vh]">
+        <table className={`w-full text-sm border-separate border-spacing-0 ${COLUMN_BAND_CLASS}`}>
+          <thead className="sticky top-0 z-10 bg-white">
+            <tr className="text-xs text-charcoal-400 border-b border-sand-200">
+              <SortableTh label="Product" sortKeyValue="name" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="left" />
+              {COST_COMPONENTS.map((c) => (
+                <SortableTh key={c.key} label={c.label} sortKeyValue={c.key} activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              ))}
+              <SortableTh label="Total Cost" sortKeyValue="total" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <th className="pb-3 px-4 text-right font-medium whitespace-nowrap">Price</th>
+              <th className="pb-3 pl-4 text-right font-medium whitespace-nowrap">Margin</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((p, i) => {
+              const pid = p.productId as number
+              const row = edits[String(pid)]
+              const total = breakdownTotal(editsToEntry(row))
+              const highlighted = highlightId === pid
+              return (
+                <tr
+                  key={pid}
+                  ref={(el) => { rowRefs.current[pid] = el }}
+                  className={`${zebraClass(i)} ${highlighted ? 'outline outline-2 -outline-offset-2 outline-terracotta-400' : ''}`}
+                >
+                  <td className="py-3 pr-4">
+                    <div className="flex items-center gap-2">
+                      <ProductThumb imageUrl={p.imageUrl} title={p.title} />
+                      <div className="min-w-0 flex items-center gap-1">
+                        <p className="text-sm text-charcoal-700 truncate max-w-[200px]">{p.title}</p>
+                        <button
+                          onClick={onOpenSpreadsheet}
+                          title="Back to Spreadsheet"
+                          className="shrink-0 text-charcoal-300 hover:text-terracotta-500 transition-colors"
+                        >
+                          <CornerUpLeft size={11} />
+                        </button>
+                        {shop && (
+                          <a
+                            href={`https://${shop}/admin/products/${pid}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="View on Shopify"
+                            className="shrink-0 text-charcoal-300 hover:text-terracotta-500 transition-colors"
+                          >
+                            <ExternalLink size={11} />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  {COST_COMPONENTS.map((c) => (
+                    <td key={c.key} className="py-3 px-2 text-right">
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={row?.[c.key] ?? ''}
+                        onChange={(e) => setComponent(pid, c.key, e.target.value)}
+                        placeholder="—"
+                        aria-label={`${c.label} cost for ${p.title}`}
+                        className="w-20 px-2 py-1 text-sm text-right border border-sand-300 rounded-lg bg-white focus:outline-none focus:border-terracotta-400"
+                      />
+                    </td>
+                  ))}
+                  <td className="py-3 px-4 text-right font-medium text-charcoal-900 whitespace-nowrap">
+                    {total != null ? fmt(total, currency, locale) : <span className="text-xs text-charcoal-300 font-normal">—</span>}
+                  </td>
+                  <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">
+                    {p.price != null ? fmt(p.price, currency, locale) : '—'}
+                  </td>
+                  <td className="py-3 pl-4 text-right">
+                    {total != null
+                      ? <MarginLabel margin={marginAt(p.price, total)} currency={currency} locale={locale} />
+                      : <span className="text-xs text-charcoal-300">—</span>}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 export default function ProductsInventory({
   openProductId,
   onOpenProductHandled,
@@ -2551,13 +2890,22 @@ export default function ProductsInventory({
   const [returnsAvailable, setReturnsAvailable] = useState(false)
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, string>>({})
   const [cogsOverrides, setCogsOverrides] = useState<Record<string, { sku: string; manualCogs: number }>>({})
+  const [costBreakdown, setCostBreakdown] = useState<Record<string, CostBreakdownEntry>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const { includeDummy } = useDummyData()
 
   // Overview (KPI cards + main table) vs. the Margin Spreadsheet tab — same in-page tab
   // pattern CustomerService uses, since this app has no sidebar-submenu precedent.
-  const [tab, setTab] = useState<'overview' | 'spreadsheet'>('overview')
+  const [tab, setTab] = useState<'overview' | 'spreadsheet' | 'costs'>('overview')
+  // Set by the Spreadsheet tab's Total Cost links — nonce so re-clicking the same product
+  // still re-scrolls to it.
+  const [costFocus, setCostFocus] = useState<{ productId: number; nonce: number } | null>(null)
+
+  function openCostBreakdown(productId: number) {
+    setCostFocus({ productId, nonce: Date.now() })
+    setTab('costs')
+  }
 
   // KPI filter + toolbar
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>('all')
@@ -2887,13 +3235,14 @@ export default function ProductsInventory({
     setLoading(true)
     setError(null)
     try {
-      const [productsRes, categoriesRes, cogsRes, fitNotesRes, preordersRes, finalSaleRes] = await Promise.all([
+      const [productsRes, categoriesRes, cogsRes, fitNotesRes, preordersRes, finalSaleRes, costBreakdownRes] = await Promise.all([
         fetch(withDummyParam('/api/shopify/products', includeDummy)),
         fetch('/api/shopify/product-categories'),
         fetch('/api/shopify/product-cogs'),
         fetch('/api/shopify/product-fit-notes'),
         fetch('/api/shopify/product-preorders'),
         fetch('/api/shopify/product-final-sale'),
+        fetch('/api/shopify/product-cost-breakdown'),
       ])
       const productsData = await productsRes.json()
       if (!productsRes.ok) throw new Error(productsData.error)
@@ -2902,6 +3251,7 @@ export default function ProductsInventory({
       const fitNotesData = await fitNotesRes.json()
       const preordersData = await preordersRes.json()
       const finalSaleData = await finalSaleRes.json()
+      const costBreakdownData = await costBreakdownRes.json()
 
       setProducts(productsData.products ?? [])
       setCurrency(productsData.currency ?? 'EUR')
@@ -2912,6 +3262,7 @@ export default function ProductsInventory({
       setShop(productsData.shop ?? null)
       setCategoryOverrides(categoriesData.categories ?? {})
       setCogsOverrides(cogsData.cogs ?? {})
+      setCostBreakdown(costBreakdownData.breakdown ?? {})
       setFitNoteOverrides(fitNotesData.fitNotes ?? {})
       setPreorderOverrides(preordersData.preorders ?? {})
       setFinalSaleOverrides(finalSaleData.finalSale ?? {})
@@ -3018,8 +3369,10 @@ export default function ProductsInventory({
     return p.cogs
   }
 
+  // Same precedence as cogsForRow(): Cost Breakdown total, then Shopify, then manual.
   function cogsFor(p: ProductSummary): number | null {
-    return p.nativeCogs ?? manualCogsFor(p)
+    const fromBreakdown = p.productId != null ? breakdownTotal(costBreakdown[String(p.productId)]) : null
+    return fromBreakdown ?? p.nativeCogs ?? manualCogsFor(p)
   }
 
   function money(n: number): string {
@@ -3273,7 +3626,7 @@ export default function ProductsInventory({
     }, 0)
     return { ...getStalledUnitsSummary(products), value, missingCostCount, stalledCount: list.length }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, cogsOverrides])
+  }, [products, cogsOverrides, costBreakdown])
 
   const stalledCostBasisSub =
     stalledSummary.missingCostCount === 0
@@ -3347,7 +3700,7 @@ export default function ProductsInventory({
     })
     return sorted
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, activeFilter, debouncedQuery, collectionFilter, sortKey, sortDir, bestSellerIds, categoryOverrides, cogsOverrides])
+  }, [products, activeFilter, debouncedQuery, collectionFilter, sortKey, sortDir, bestSellerIds, categoryOverrides, cogsOverrides, costBreakdown])
 
   const resolvedRows: ResolvedRow[] = useMemo(() => {
     return filteredSortedProducts.map((p) => {
@@ -3376,7 +3729,7 @@ export default function ProductsInventory({
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, fitNoteOverrides, preorderOverrides, finalSaleOverrides, tagOverrides])
+  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, costBreakdown, fitNoteOverrides, preorderOverrides, finalSaleOverrides, tagOverrides])
 
   // Exports exactly what the Stalled Inventory table + each row's "Estimate recovery" panel
   // show — one row per product currently listed (post search/collection/sort filters), with
@@ -3498,6 +3851,13 @@ export default function ProductsInventory({
                 ${tab === 'spreadsheet' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
             >
               <Table2 size={13} /> Spreadsheet
+            </button>
+            <button
+              onClick={() => setTab('costs')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
+                ${tab === 'costs' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
+            >
+              <Calculator size={13} /> Cost Breakdown
             </button>
           </div>
           <button
@@ -3784,12 +4144,33 @@ export default function ProductsInventory({
           currency={currency}
           locale={locale}
           cogsOverrides={cogsOverrides}
+          costBreakdown={costBreakdown}
           categoryFor={categoryFor}
           onAssignCogs={handleCogsAssigned}
+          onOpenBreakdown={openCostBreakdown}
           onCreateDiscount={handleCreateDiscount}
           onMarkdown={handleMarkdownProduct}
           onRevertMarkdown={handleRevertMarkdown}
         />
+      )}
+
+      {/* Kept mounted (just hidden) once loaded so unsaved breakdown edits survive a jump to
+          the Spreadsheet tab and back via the linked Total Cost columns. */}
+      {!loading && !error && inventoryAvailable && products.length > 0 && (
+        <div hidden={tab !== 'costs'}>
+          <CostBreakdownSheet
+            products={products}
+            shop={shop}
+            currency={currency}
+            locale={locale}
+            active={tab === 'costs'}
+            costBreakdown={costBreakdown}
+            focusRequest={costFocus}
+            categoryFor={categoryFor}
+            onSaved={setCostBreakdown}
+            onOpenSpreadsheet={() => setTab('spreadsheet')}
+          />
+        </div>
       )}
     </section>
   )
