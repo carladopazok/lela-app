@@ -85,6 +85,16 @@ Each row has four independent Shopify write actions, all behind an inline confir
 - **Bulk version:** "Sync N costs to Shopify" in the Spreadsheet toolbar. It targets every product whose saved breakdown total differs from Shopify's cost, ignoring the search and collection filters, after one inline confirm. It runs the same per-product push one product at a time, showing progress and each row's result. It stops after 3 failures in a row, since that usually means a systemic problem such as a missing scope or expired session. It shows "Costs synced" and is disabled when nothing differs.
 - **Create Discount** — creates a real Shopify discount code via the existing `create-discount` route (called with `markdown: false`), reusing `createProductDiscountCode()` unchanged. Needs `write_discounts`, which per the Auth section above is not yet confirmed granted — may 403 until an OAuth reconnect; the raw error is surfaced rather than masked.
 
+### Discount Floor (Products & Inventory)
+Every product has a minimum acceptable margin %, 10% by default (`DEFAULT_MARGIN_FLOOR_PCT` in `src/lib/margin-floor.ts`, client-safe). You can override it per product in the Margin Spreadsheet's **Min Margin** column; blank means the default. Overrides are saved to `data/product-margin-floors.json` via `GET`/`PUT /api/shopify/product-margin-floors` by the spreadsheet's existing Save button, together with the discount drafts. Entries equal to the default are dropped.
+
+It's a **warning, never a block**. When a discount or markdown would push margin % below the floor (`isBelowFloor()`), warnings appear in:
+- the Spreadsheet's Discount % input (red), its Margin at Discount cell, and its Markdown and Create Discount confirmations
+- the Margin cell, if the current price is already under the floor (e.g. after a markdown)
+- the Overview's Stalled Inventory panel (`StalledCampaignPanel`, via `ResolvedRow.marginFloor`): under the discount selector, on the Margin at Discount stat, and in the Create Discount confirmation
+
+The Min Margin cell also shows the largest discount that stays at or above the floor (`maxDiscountForFloor()`: `1 − cost / (price·(1 − floor))`). The shared warning text comes from the `FloorWarning` component. No warning appears when cost is unknown, because margin can't be computed.
+
 ### Cost Breakdown (Products & Inventory)
 A third "Cost Breakdown" tab (`CostBreakdownSheet` in `ProductsInventory.tsx`) with one hand-entered per-unit € input per product for each of Fabric, Beads, Garment, Printing, Painting, Canvas, Label, Hand work, Shipping and Shopify Monthly (the list is `BUILT_IN_COST_COMPONENTS` in `src/lib/cost-breakdown.ts`, which is client-safe and has no `fs`). **Total Cost** is always calculated (`breakdownTotal()`: every stored value summed, blanks = 0, `null` if nothing is filled) and never typed in.
 
@@ -113,6 +123,7 @@ A third "Cost Breakdown" tab (`CostBreakdownSheet` in `ProductsInventory.tsx`) w
 | `data/product-final-sale.json` | `src/lib/product-final-sale-storage.ts` | `{ productId: { text, status: 'draft'\|'published', updatedAt } }` — draft state + mirror of the published `custom.final_sale` metafield |
 | `data/product-cost-breakdown.json` | `src/lib/product-cost-breakdown-storage.ts` | `{ productId: { fabric?, beads?, garment?, printing?, painting?, canvas?, label?, handWork?, shipping?, shopifyMonthly?, [customKey]? } }` — per-unit € cost components from the "Cost Breakdown" tab; their sum overrides Shopify's Cost per item |
 | `data/cost-columns.json` | `src/lib/product-cost-breakdown-storage.ts` | `[{ key, label, custom? }]` — ordered Cost Breakdown column layout (built-in + custom), with editable titles; absent = built-in defaults |
+| `data/product-margin-floors.json` | `src/lib/product-margin-floors-storage.ts` | `{ productId: minMarginPct }` — per-product discount-floor overrides (absent = 10% default), saved by the Margin Spreadsheet's Save button |
 | `data/product-discount-drafts.json` | `src/lib/product-discount-drafts-storage.ts` | `{ productId: discountPercent }` — scratch discount % per product staged in the Products & Inventory "Spreadsheet" tab, only written when its "Save" button is clicked |
 | `data/tickets.json` | `src/lib/cs-storage.ts` | CS ticket array |
 | `data/macros.json` | `src/lib/cs-storage.ts` | CS macro array |

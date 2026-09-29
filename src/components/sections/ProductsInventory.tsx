@@ -26,13 +26,16 @@ import {
 import { QUALIFYING_RETURN_REASONS } from '@/lib/shopify-returns'
 import { LOW_STOCK_TAG, RESTOCK_EARLY_TAG, type ToggleableProductTag } from '@/lib/product-tags'
 import { BUILT_IN_COST_COMPONENTS, breakdownTotal, type CostBreakdownEntry, type CostComponent } from '@/lib/cost-breakdown'
+import {
+  DEFAULT_MARGIN_FLOOR_PCT, marginFloorFor, maxDiscountForFloor, isBelowFloor, type MarginFloors,
+} from '@/lib/margin-floor'
 import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry, PreorderEntry, FinalSaleEntry } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
 type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status' | 'runway'
 type SpreadsheetSortKey =
   | 'name' | 'created' | 'stock' | 'unitsSold' | 'cost' | 'price' | 'markedDown' | 'margin' | 'discount'
-  | 'discountedPrice' | 'discountedMargin'
+  | 'discountedPrice' | 'discountedMargin' | 'marginFloor'
 type CostBreakdownSortKey = string // 'name' | 'total' | any cost component key (incl. custom columns)
 type SortDir = 'asc' | 'desc'
 type StatusBadge = 'bestseller' | 'soldout' | 'stalled' | null
@@ -97,6 +100,41 @@ function MarginLabel({
   return (
     <span className={`text-xs font-medium ${negative ? 'text-red-600' : 'text-olive-600'}`}>
       {fmt(margin.amount, currency, locale)} ({margin.percent.toFixed(0)}%){negative && ' ⚠️'}
+    </span>
+  )
+}
+
+// Discount-floor warning — shown wherever a discount/markdown would push margin below the
+// product's minimum acceptable margin. Informational only; it never blocks the action.
+function FloorWarning({
+  margin,
+  floorPct,
+  price,
+  cost,
+  size = 'sm',
+}: {
+  margin: { amount: number; percent: number } | null
+  floorPct: number
+  price: number | null
+  cost: number | null
+  size?: 'xs' | 'sm'
+}) {
+  if (!isBelowFloor(margin, floorPct)) return null
+  const maxOff = maxDiscountForFloor(price, cost, floorPct)
+  const safe = maxOff == null
+    ? null
+    : maxOff <= 0
+      ? 'already below it at full price'
+      : `max ${Math.floor(maxOff * 1000) / 10}% off stays above it`
+  return (
+    <span
+      className={`inline-flex items-start gap-1 text-red-600 ${size === 'xs' ? 'text-[10px]' : 'text-xs'}`}
+      title={`Minimum acceptable margin for this product is ${floorPct}%`}
+    >
+      <AlertTriangle size={size === 'xs' ? 10 : 12} className="shrink-0 mt-px" />
+      <span>
+        {margin!.percent.toFixed(0)}% margin — below your {floorPct}% floor{safe ? ` (${safe})` : ''}
+      </span>
     </span>
   )
 }
@@ -356,6 +394,7 @@ interface ResolvedRow {
   isSoldOutLive: boolean
   category: string | null
   cost: number | null // final resolved cost (native Shopify cost wins over manual)
+  marginFloor: number // minimum acceptable margin % (discount floor) for this product
   manualCost: number | null // manually entered cost only, for the CogsEditor's editable state
   margin: { amount: number; percent: number } | null
   returnRate: number | null
@@ -451,11 +490,13 @@ function StalledCampaignPanel({
   onToggleChip,
   conversionPercent,
   onConversionPercentChange,
+  marginFloorPct,
 }: {
   product: ProductSummary
   currency: string
   locale: string
   cost: number | null
+  marginFloorPct: number
   relatedEntries: RelatedProductEntry[]
   productsById: Map<string, ProductSummary>
   interestedData: InterestedCustomersResponse | null
@@ -511,6 +552,7 @@ function StalledCampaignPanel({
 
   const discountedPrice = product.price != null ? product.price * (1 - discount) : null
   const discountedMargin = marginAt(discountedPrice, cost)
+  const discountBreachesFloor = discount > 0 && isBelowFloor(discountedMargin, marginFloorPct)
   const costBasisAtRisk = cost != null ? cost * unitsOnHand : null
   const potentialRevenue = discountedPrice != null ? discountedPrice * buyers : 0
   const potentialRevenueAllBuyers = discountedPrice != null ? discountedPrice * unitsOnHand : 0
@@ -646,6 +688,12 @@ function StalledCampaignPanel({
         </div>
       </div>
 
+      {discountBreachesFloor && (
+        <div className="mb-4 -mt-2">
+          <FloorWarning margin={discountedMargin} floorPct={marginFloorPct} price={product.price} cost={cost} />
+        </div>
+      )}
+
       {/* Assumed conversion — single input, no historical-data helper text (none exists to reference) */}
       <div className="flex items-center gap-2 flex-wrap mb-5">
         <span className="text-xs text-charcoal-400 whitespace-nowrap">Assumed conversion</span>
@@ -677,6 +725,11 @@ function StalledCampaignPanel({
           <p className="text-base font-serif font-semibold text-charcoal-700">
             <MarginLabel margin={discountedMargin} currency={currency} locale={locale} />
           </p>
+          {discountBreachesFloor && (
+            <p className="text-[10px] text-red-600 flex items-center gap-1">
+              <AlertTriangle size={10} /> below {marginFloorPct}% floor
+            </p>
+          )}
         </div>
         <div>
           <p className="text-xs text-charcoal-400" title="Cost of the on-hand stalled inventory itself — fixed, doesn't move with the discount %.">
@@ -725,6 +778,11 @@ function StalledCampaignPanel({
               This creates a real, live discount code on Shopify for <strong>{Math.round(discount * 100)}% off</strong> this
               product — any customer can use it at checkout.
             </p>
+            {discountBreachesFloor && (
+              <p className="mb-3">
+                <FloorWarning margin={discountedMargin} floorPct={marginFloorPct} price={product.price} cost={cost} />
+              </p>
+            )}
             <label className="block text-xs text-charcoal-500 mb-1">Discount name</label>
             <input
               type="text"
@@ -1905,6 +1963,7 @@ function ProductRow({
               currency={currency}
               locale={locale}
               cost={row.cost}
+              marginFloorPct={row.marginFloor}
               relatedEntries={relatedEntries}
               productsById={productsById}
               interestedData={interestedData}
@@ -2066,6 +2125,8 @@ function MarginSpreadsheet({
   onMarkdown,
   onRevertMarkdown,
   onPushCost,
+  marginFloors,
+  onMarginFloorsSaved,
 }: {
   products: ProductSummary[]
   shop: string | null
@@ -2084,7 +2145,19 @@ function MarginSpreadsheet({
   onMarkdown: (product: ProductSummary, percentage: number) => Promise<{ ok: boolean; message: string }>
   onRevertMarkdown: (product: ProductSummary) => Promise<{ ok: boolean; message: string }>
   onPushCost: (product: ProductSummary) => Promise<{ ok: boolean; message: string }>
+  marginFloors: MarginFloors
+  onMarginFloorsSaved: (floors: MarginFloors) => void
 }) {
+  // Per-product minimum margin %, edited as raw strings (blank = the 10% default) and saved
+  // together with the discount drafts by the same "Save" button.
+  const [floorEdits, setFloorEdits] = useState<Record<string, string>>(() =>
+    Object.fromEntries(Object.entries(marginFloors).map(([k, v]) => [k, String(v)])),
+  )
+  function floorFor(productId: number): number {
+    const raw = floorEdits[String(productId)]
+    const v = raw != null && raw.trim() !== '' ? parseFloat(raw) : NaN
+    return Number.isFinite(v) && v >= 0 && v < 100 ? v : DEFAULT_MARGIN_FLOOR_PCT
+  }
   const [discountDrafts, setDiscountDrafts] = useState<Record<string, number>>({})
   const [loadingDrafts, setLoadingDrafts] = useState(true)
   const [dirty, setDirty] = useState(false)
@@ -2193,13 +2266,30 @@ function MarginSpreadsheet({
     setSaving(true)
     setSaveError(null)
     try {
-      const res = await fetch('/api/shopify/product-discount-drafts', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ drafts: discountDrafts }),
-      })
+      const floors: MarginFloors = {}
+      for (const [pid, raw] of Object.entries(floorEdits)) {
+        if (raw.trim() === '') continue
+        const v = parseFloat(raw)
+        if (!Number.isFinite(v) || v < 0 || v >= 100) throw new Error('Min margin must be a number from 0 to 99')
+        floors[pid] = v
+      }
+      const [res, floorsRes] = await Promise.all([
+        fetch('/api/shopify/product-discount-drafts', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ drafts: discountDrafts }),
+        }),
+        fetch('/api/shopify/product-margin-floors', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ floors }),
+        }),
+      ])
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
+      const floorsData = await floorsRes.json()
+      if (!floorsRes.ok) throw new Error(floorsData.error)
+      onMarginFloorsSaved(floorsData.floors ?? {})
       setDirty(false)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -2258,6 +2348,9 @@ function MarginSpreadsheet({
         case 'discount':
           cmp = (discountDrafts[String(a.productId)] ?? 0) - (discountDrafts[String(b.productId)] ?? 0)
           break
+        case 'marginFloor':
+          cmp = floorFor(a.productId as number) - floorFor(b.productId as number)
+          break
         case 'discountedPrice': {
           const aPct = discountDrafts[String(a.productId)] ?? 0
           const bPct = discountDrafts[String(b.productId)] ?? 0
@@ -2282,7 +2375,8 @@ function MarginSpreadsheet({
       return sortDir === 'asc' ? cmp : -cmp
     })
     return sorted
-  }, [products, search, collectionFilter, categoryFor, sortKey, sortDir, cogsOverrides, costBreakdown, discountDrafts])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products, search, collectionFilter, categoryFor, sortKey, sortDir, cogsOverrides, costBreakdown, discountDrafts, floorEdits])
 
   if (loadingDrafts) return <LoadingSpinner label="Loading spreadsheet…" />
 
@@ -2378,6 +2472,14 @@ function MarginSpreadsheet({
               <SortableTh label="Price" sortKeyValue="price" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Marked Down" sortKeyValue="markedDown" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Margin" sortKeyValue="margin" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh
+                label="Min Margin"
+                sortKeyValue="marginFloor"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={handleSort}
+                title={`Discount floor — the lowest margin % you'll accept for this product (blank = ${DEFAULT_MARGIN_FLOOR_PCT}%). Discounts and markdowns below it get a warning.`}
+              />
               <SortableTh label="Discount %" sortKeyValue="discount" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Price at Discount" sortKeyValue="discountedPrice" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Margin at Discount" sortKeyValue="discountedMargin" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
@@ -2397,6 +2499,9 @@ function MarginSpreadsheet({
               const discountPct = discountDrafts[String(pid)] ?? 0
               const discountedPrice = price != null ? price * (1 - discountPct / 100) : null
               const discountedMargin = marginAt(discountedPrice, cost)
+              const floorPct = floorFor(pid)
+              const maxOff = maxDiscountForFloor(price, cost, floorPct)
+              const discountBreachesFloor = discountPct > 0 && isBelowFloor(discountedMargin, floorPct)
 
               return (
                 <tr key={pid} className={zebraClass(i)}>
@@ -2489,7 +2594,44 @@ function MarginSpreadsheet({
                     )}
                   </td>
                   <td className="py-3 px-4 text-right">
-                    <MarginLabel margin={margin} currency={currency} locale={locale} />
+                    <div className="flex flex-col items-end gap-0.5">
+                      <MarginLabel margin={margin} currency={currency} locale={locale} />
+                      {/* Current price already under the floor (e.g. after a markdown) */}
+                      {isBelowFloor(margin, floorPct) && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-red-600 whitespace-nowrap" title={`Minimum acceptable margin is ${floorPct}%`}>
+                          <AlertTriangle size={10} /> below {floorPct}% floor
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <div className="flex flex-col items-end gap-0.5">
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min={0}
+                          max={99}
+                          step="0.5"
+                          value={floorEdits[String(pid)] ?? ''}
+                          onChange={(e) => {
+                            setFloorEdits((prev) => ({ ...prev, [String(pid)]: e.target.value }))
+                            setDirty(true)
+                          }}
+                          placeholder={String(DEFAULT_MARGIN_FLOOR_PCT)}
+                          aria-label={`Minimum margin for ${p.title}`}
+                          className="w-14 px-2 py-1 text-sm text-right border border-sand-300 rounded-lg bg-white focus:outline-none focus:border-terracotta-400"
+                        />
+                        <span className="text-xs text-charcoal-400">%</span>
+                      </div>
+                      {maxOff != null && (
+                        <span
+                          className="text-[10px] text-charcoal-400 whitespace-nowrap"
+                          title={`Largest discount that keeps margin at or above ${floorPct}%`}
+                        >
+                          {maxOff <= 0 ? 'no discount room' : `max ${Math.floor(maxOff * 1000) / 10}% off`}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="py-3 px-4 text-right">
                     <div className="flex items-center justify-end gap-1">
@@ -2503,7 +2645,9 @@ function MarginSpreadsheet({
                           setDiscountFor(pid, Number.isFinite(v) ? Math.max(0, Math.min(95, Math.round(v))) : 0)
                         }}
                         placeholder="0"
-                        className="w-14 px-2 py-1 text-sm text-right border border-sand-300 rounded-lg focus:outline-none focus:border-terracotta-400"
+                        title={discountBreachesFloor ? `Below this product's ${floorPct}% minimum margin` : undefined}
+                        className={`w-14 px-2 py-1 text-sm text-right border rounded-lg focus:outline-none
+                          ${discountBreachesFloor ? 'border-red-400 bg-red-50 focus:border-red-500' : 'border-sand-300 focus:border-terracotta-400'}`}
                       />
                       <span className="text-xs text-charcoal-400">%</span>
                     </div>
@@ -2512,9 +2656,16 @@ function MarginSpreadsheet({
                     {discountPct > 0 && discountedPrice != null ? fmt(discountedPrice, currency, locale) : '—'}
                   </td>
                   <td className="py-3 px-4 text-right">
-                    {discountPct > 0
-                      ? <MarginLabel margin={discountedMargin} currency={currency} locale={locale} />
-                      : <span className="text-xs text-charcoal-300">—</span>}
+                    {discountPct > 0 ? (
+                      <div className="flex flex-col items-end gap-0.5">
+                        <MarginLabel margin={discountedMargin} currency={currency} locale={locale} />
+                        {discountBreachesFloor && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-red-600 whitespace-nowrap">
+                            <AlertTriangle size={10} /> below {floorPct}% floor
+                          </span>
+                        )}
+                      </div>
+                    ) : <span className="text-xs text-charcoal-300">—</span>}
                   </td>
                   <td className="py-3 pl-4">
                     <div className="flex flex-col gap-1.5 min-w-[160px]">
@@ -2525,6 +2676,11 @@ function MarginSpreadsheet({
                             <strong>{discountedPrice != null ? fmt(discountedPrice, currency, locale) : '—'}</strong> on
                             Shopify?
                           </p>
+                          {discountBreachesFloor && (
+                            <p className="mb-1.5 whitespace-normal">
+                              <FloorWarning margin={discountedMargin} floorPct={floorPct} price={price} cost={cost} size="xs" />
+                            </p>
+                          )}
                           <div className="flex gap-1.5">
                             <button
                               disabled={markdownBusyId === pid}
@@ -2620,6 +2776,11 @@ function MarginSpreadsheet({
                             onChange={(e) => setDiscountNameById((prev) => ({ ...prev, [pid]: e.target.value }))}
                             className="w-full mb-1.5 px-2 py-1 text-[11px] border border-sand-300 rounded-md focus:outline-none focus:border-terracotta-400"
                           />
+                          {discountBreachesFloor && (
+                            <p className="mb-1.5 whitespace-normal">
+                              <FloorWarning margin={discountedMargin} floorPct={floorPct} price={price} cost={cost} size="xs" />
+                            </p>
+                          )}
                           <div className="flex gap-1.5">
                             <button
                               disabled={discountBusyId === pid || !(discountNameById[pid] ?? '').trim()}
@@ -3496,6 +3657,7 @@ export default function ProductsInventory({
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, string>>({})
   const [cogsOverrides, setCogsOverrides] = useState<Record<string, { sku: string; manualCogs: number }>>({})
   const [costBreakdown, setCostBreakdown] = useState<Record<string, CostBreakdownEntry>>({})
+  const [marginFloors, setMarginFloors] = useState<MarginFloors>({})
   // Full ordered Cost Breakdown column layout (built-in + custom, with editable titles).
   const [costComponents, setCostComponents] = useState<CostComponent[]>([...BUILT_IN_COST_COMPONENTS])
   const [loading, setLoading] = useState(true)
@@ -3842,7 +4004,7 @@ export default function ProductsInventory({
     setLoading(true)
     setError(null)
     try {
-      const [productsRes, categoriesRes, cogsRes, fitNotesRes, preordersRes, finalSaleRes, costBreakdownRes] = await Promise.all([
+      const [productsRes, categoriesRes, cogsRes, fitNotesRes, preordersRes, finalSaleRes, costBreakdownRes, marginFloorsRes] = await Promise.all([
         fetch(withDummyParam('/api/shopify/products', includeDummy)),
         fetch('/api/shopify/product-categories'),
         fetch('/api/shopify/product-cogs'),
@@ -3850,6 +4012,7 @@ export default function ProductsInventory({
         fetch('/api/shopify/product-preorders'),
         fetch('/api/shopify/product-final-sale'),
         fetch('/api/shopify/product-cost-breakdown'),
+        fetch('/api/shopify/product-margin-floors'),
       ])
       const productsData = await productsRes.json()
       if (!productsRes.ok) throw new Error(productsData.error)
@@ -3859,6 +4022,7 @@ export default function ProductsInventory({
       const preordersData = await preordersRes.json()
       const finalSaleData = await finalSaleRes.json()
       const costBreakdownData = await costBreakdownRes.json()
+      const marginFloorsData = await marginFloorsRes.json()
 
       setProducts(productsData.products ?? [])
       setCurrency(productsData.currency ?? 'EUR')
@@ -3870,6 +4034,7 @@ export default function ProductsInventory({
       setCategoryOverrides(categoriesData.categories ?? {})
       setCogsOverrides(cogsData.cogs ?? {})
       setCostBreakdown(costBreakdownData.breakdown ?? {})
+      setMarginFloors(marginFloorsData.floors ?? {})
       setCostComponents(costBreakdownData.columns ?? [...BUILT_IN_COST_COMPONENTS])
       setFitNoteOverrides(fitNotesData.fitNotes ?? {})
       setPreorderOverrides(preordersData.preorders ?? {})
@@ -4345,6 +4510,7 @@ export default function ProductsInventory({
         cost: cogsFor(p),
         manualCost: manualCogsFor(p),
         margin: marginAt(p.price, cogsFor(p)),
+        marginFloor: marginFloorFor(marginFloors, p.productId),
         returnRate: p.returnRate,
         returnFlagged: p.returnFlagged,
         fitNote: fitNoteFor(p),
@@ -4357,7 +4523,7 @@ export default function ProductsInventory({
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, costBreakdown, fitNoteOverrides, preorderOverrides, finalSaleOverrides, tagOverrides])
+  }, [filteredSortedProducts, bestSellerIds, categoryOverrides, cogsOverrides, costBreakdown, marginFloors, fitNoteOverrides, preorderOverrides, finalSaleOverrides, tagOverrides])
 
   // Exports exactly what the Stalled Inventory table + each row's "Estimate recovery" panel
   // show — one row per product currently listed (post search/collection/sort filters), with
@@ -4781,6 +4947,8 @@ export default function ProductsInventory({
           onMarkdown={handleMarkdownProduct}
           onRevertMarkdown={handleRevertMarkdown}
           onPushCost={handlePushCostToShopify}
+          marginFloors={marginFloors}
+          onMarginFloorsSaved={setMarginFloors}
         />
       )}
 
