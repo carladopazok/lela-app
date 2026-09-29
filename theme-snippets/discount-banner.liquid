@@ -1,0 +1,73 @@
+{%- comment -%}
+  Discount Banner — reference only, not part of the Next.js build.
+
+  Renders the custom.discount_banner product metafield (JSON, written from the Lela
+  dashboard's Products & Inventory → Spreadsheet or Discounts tab → "Show banner") on the
+  product page: the banner message, the discount's name and — for code discounts — the code
+  itself with a "Copy" button so shoppers can use it at checkout.
+
+  The metafield looks like:
+    { "title": "Autumn Sale", "code": "AUTUMN20", "message": "20% off this piece", "ends_at": "2026-10-31T23:00:00Z" }
+  "code" is null for automatic discounts (applied at checkout without a code). The banner hides
+  itself once "ends_at" has passed, even if nobody removes it from the dashboard (Shopify caches
+  pages, so it can linger a little after the end time).
+
+  Setup:
+  1. Shopify admin → Online Store → Themes → Edit code → Snippets → Add a new snippet
+     → name it "discount-banner" → paste this file's contents.
+  2. Render it from your product template (e.g. main-product.liquid), near the price or the
+     add-to-cart button:
+       {% render 'discount-banner', product: product %}
+{%- endcomment -%}
+
+{%- assign lela_banner = product.metafields.custom.discount_banner.value -%}
+{%- if lela_banner != blank and lela_banner.message != blank -%}
+  {%- assign lela_banner_live = true -%}
+  {%- if lela_banner.ends_at != blank -%}
+    {%- assign lela_now = 'now' | date: '%s' | plus: 0 -%}
+    {%- assign lela_ends = lela_banner.ends_at | date: '%s' | plus: 0 -%}
+    {%- if lela_ends <= lela_now -%}{%- assign lela_banner_live = false -%}{%- endif -%}
+  {%- endif -%}
+
+  {%- if lela_banner_live -%}
+    <div class="lela-discount-banner">
+      <p class="lela-discount-banner__title">{{ lela_banner.title | escape }}</p>
+      <p class="lela-discount-banner__message">{{ lela_banner.message | escape }}</p>
+      {%- if lela_banner.code != blank -%}
+        <div class="lela-discount-banner__code-row">
+          <span class="lela-discount-banner__hint">Use code</span>
+          <code class="lela-discount-banner__code">{{ lela_banner.code | escape }}</code>
+          <button type="button" class="lela-discount-banner__copy" data-code="{{ lela_banner.code | escape }}">Copy</button>
+        </div>
+      {%- else -%}
+        <p class="lela-discount-banner__hint">Applied automatically at checkout.</p>
+      {%- endif -%}
+      {%- if lela_banner.ends_at != blank -%}
+        <p class="lela-discount-banner__ends">Ends {{ lela_banner.ends_at | date: '%B %-d' }}</p>
+      {%- endif -%}
+    </div>
+
+    <style>
+      .lela-discount-banner { margin: 1rem 0; padding: 0.85rem 1rem; border: 1px dashed #B5563E; background: #FBF3EC; border-radius: 10px; }
+      .lela-discount-banner__title { margin: 0 0 0.2rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #8A3B2B; }
+      .lela-discount-banner__message { margin: 0 0 0.5rem; font-size: 1.05rem; line-height: 1.4; }
+      .lela-discount-banner__code-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+      .lela-discount-banner__hint { margin: 0; font-size: 0.85rem; opacity: 0.8; }
+      .lela-discount-banner__code { padding: 0.2rem 0.55rem; border-radius: 6px; background: #fff; border: 1px solid #E3CFC2; font-size: 0.95rem; font-weight: 600; letter-spacing: 0.04em; }
+      .lela-discount-banner__copy { padding: 0.25rem 0.7rem; border-radius: 6px; border: 1px solid #B5563E; background: #B5563E; color: #fff; font-size: 0.8rem; cursor: pointer; }
+      .lela-discount-banner__ends { margin: 0.5rem 0 0; font-size: 0.8rem; opacity: 0.7; }
+    </style>
+
+    <script>
+      document.querySelectorAll('.lela-discount-banner__copy').forEach(function (btn) {
+        if (btn.dataset.bound) return;
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', function () {
+          var code = btn.getAttribute('data-code');
+          var done = function () { btn.textContent = 'Copied!'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500); };
+          if (navigator.clipboard) { navigator.clipboard.writeText(code).then(done, function () {}); }
+        });
+      });
+    </script>
+  {%- endif -%}
+{%- endif -%}

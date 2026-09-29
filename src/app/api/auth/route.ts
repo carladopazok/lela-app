@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { randomBytes } from 'crypto'
 
 // Scopes needed for all dashboard features
-const SCOPES = 'read_orders,read_all_orders,read_customers,write_customers,read_products,write_products,read_inventory,read_returns,write_discounts'
+const SCOPES = 'read_orders,read_all_orders,read_customers,write_customers,read_products,write_products,read_inventory,read_returns,read_discounts,write_discounts'
 
 export async function GET() {
   const shop = process.env.SHOPIFY_STORE_DOMAIN!

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   RefreshCw, AlertCircle, Package, Check, X, Info, Boxes, XCircle, Clock, Mail, Loader2,
   Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, ArrowLeft, Users,
@@ -18,6 +18,7 @@ import {
   LabelList,
 } from 'recharts'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
+import StatCard from '@/components/ui/StatCard'
 import { useDummyData, withDummyParam } from '@/lib/dummy-data-context'
 import {
   STALLED_DAYS, LOW_RUNWAY_THRESHOLD_DAYS, daysSince, isStalled, isSoldOutLive,
@@ -30,6 +31,8 @@ import {
   DEFAULT_MARGIN_FLOOR_PCT, marginFloorFor, maxDiscountForFloor, isBelowFloor, type MarginFloors,
 } from '@/lib/margin-floor'
 import { SLOW_MOVER_DAYS, inventoryAgeDays, isSlowMover, suggestSlowMoverDiscount } from '@/lib/inventory-age'
+import { discountAppliesToProduct, type DiscountSummary } from '@/lib/shopify-discount-list'
+import type { DiscountBannerEntry } from '@/lib/product-discount-banners-storage'
 import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry, PreorderEntry, FinalSaleEntry } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
@@ -2128,6 +2131,10 @@ function MarginSpreadsheet({
   onPushCost,
   marginFloors,
   onMarginFloorsSaved,
+  eligibleDiscountsFor,
+  banners,
+  onPublishBanner,
+  onRemoveBanner,
 }: {
   products: ProductSummary[]
   shop: string | null
@@ -2148,6 +2155,10 @@ function MarginSpreadsheet({
   onPushCost: (product: ProductSummary) => Promise<{ ok: boolean; message: string }>
   marginFloors: MarginFloors
   onMarginFloorsSaved: (floors: MarginFloors) => void
+  eligibleDiscountsFor: (productId: number) => DiscountSummary[]
+  banners: Record<string, DiscountBannerEntry>
+  onPublishBanner: (productId: number, discountId: string, message: string) => Promise<{ ok: boolean; message: string }>
+  onRemoveBanner: (productId: number) => Promise<{ ok: boolean; message: string }>
 }) {
   // Per-product minimum margin %, edited as raw strings (blank = the 10% default) and saved
   // together with the discount drafts by the same "Save" button.
@@ -2964,6 +2975,16 @@ function MarginSpreadsheet({
                           {pushCostResult[pid].message}
                         </p>
                       )}
+
+                      <DiscountBannerControl
+                        productId={pid}
+                        eligible={eligibleDiscountsFor(pid)}
+                        banner={banners[String(pid)]}
+                        currency={currency}
+                        locale={locale}
+                        onPublish={onPublishBanner}
+                        onRemove={onRemoveBanner}
+                      />
                     </div>
                   </td>
                 </tr>
@@ -3715,6 +3736,380 @@ function CostBreakdownSheet({
   )
 }
 
+// ─── Discount banner — publishes/removes the custom.discount_banner metafield that
+// theme-snippets/discount-banner.liquid renders on the product page. Shared by the Margin
+// Spreadsheet's Actions column and the Discounts tab's per-product list.
+function defaultBannerMessage(d: DiscountSummary, currency: string, locale: string): string {
+  if (d.percentage != null) return `${Math.round(d.percentage * 100)}% off this piece`
+  if (d.amount) return `${fmt(d.amount.amount, d.amount.currencyCode || currency, locale)} off this piece`
+  return d.title
+}
+
+function DiscountBannerControl({
+  productId,
+  eligible,
+  banner,
+  currency,
+  locale,
+  onPublish,
+  onRemove,
+}: {
+  productId: number
+  eligible: DiscountSummary[]
+  banner: DiscountBannerEntry | undefined
+  currency: string
+  locale: string
+  onPublish: (productId: number, discountId: string, message: string) => Promise<{ ok: boolean; message: string }>
+  onRemove: (productId: number) => Promise<{ ok: boolean; message: string }>
+}) {
+  const [open, setOpen] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const [discountId, setDiscountId] = useState('')
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  if (!banner && eligible.length === 0) return null
+
+  function start() {
+    const first = eligible[0]
+    setDiscountId(first.id)
+    setMessage(defaultBannerMessage(first, currency, locale))
+    setResult(null)
+    setOpen(true)
+  }
+
+  if (banner && !open) {
+    return (
+      <div className="flex flex-col gap-1">
+        <span
+          className="inline-flex items-center gap-1 text-[11px] text-olive-600"
+          title={`"${banner.message}" — live on the product page since ${formatDate(banner.publishedAt)}`}
+        >
+          <Megaphone size={11} /> Banner live{banner.code ? `: ${banner.code}` : ' (automatic)'}
+        </span>
+        {confirmRemove ? (
+          <div className="flex items-center gap-1.5 text-[11px]">
+            <span className="text-charcoal-600">Remove from storefront?</span>
+            <button
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true)
+                const r = await onRemove(productId)
+                setBusy(false)
+                setConfirmRemove(false)
+                setResult(r)
+              }}
+              className="font-medium text-red-600 hover:underline disabled:opacity-50"
+            >
+              {busy ? 'Removing…' : 'Remove'}
+            </button>
+            <button onClick={() => setConfirmRemove(false)} className="text-charcoal-400 hover:underline">Cancel</button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-[11px]">
+            {eligible.length > 0 && <button onClick={start} className="text-charcoal-500 hover:text-terracotta-600 hover:underline">Change</button>}
+            <button onClick={() => setConfirmRemove(true)} className="text-charcoal-500 hover:text-red-600 hover:underline">Remove</button>
+          </div>
+        )}
+        {result && <p className={`text-[10px] ${result.ok ? 'text-olive-600' : 'text-red-600'}`}>{result.message}</p>}
+      </div>
+    )
+  }
+
+  if (!open) {
+    return (
+      <div className="flex flex-col gap-1">
+        <button
+          onClick={start}
+          className="flex items-center gap-1.5 text-xs font-medium text-charcoal-600 hover:text-terracotta-600 border border-sand-300 hover:border-terracotta-300 px-2.5 py-1 rounded-lg transition-colors"
+        >
+          <Megaphone size={11} /> Show discount banner
+        </button>
+        {result && <p className={`text-[10px] ${result.ok ? 'text-olive-600' : 'text-red-600'}`}>{result.message}</p>}
+      </div>
+    )
+  }
+
+  const selected = eligible.find((d) => d.id === discountId)
+  return (
+    <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg flex flex-col gap-1.5 min-w-[200px]">
+      <p className="text-[11px] text-charcoal-700">Show this discount on the product page:</p>
+      {eligible.length > 1 ? (
+        <select
+          value={discountId}
+          onChange={(e) => {
+            setDiscountId(e.target.value)
+            const d = eligible.find((x) => x.id === e.target.value)
+            if (d) setMessage(defaultBannerMessage(d, currency, locale))
+          }}
+          className="px-2 py-1 text-[11px] border border-sand-300 rounded-md bg-white focus:outline-none focus:border-terracotta-400"
+        >
+          {eligible.map((d) => (
+            <option key={d.id} value={d.id}>{d.title}{d.code ? ` (${d.code})` : ' (automatic)'}</option>
+          ))}
+        </select>
+      ) : (
+        <p className="text-[11px] font-medium text-charcoal-700">
+          {selected?.title}{selected?.code ? ` · ${selected.code}` : ' · automatic'}
+        </p>
+      )}
+      <input
+        type="text"
+        value={message}
+        onChange={(e) => setMessage(e.target.value)}
+        maxLength={200}
+        placeholder="Banner message"
+        aria-label="Banner message"
+        className="px-2 py-1 text-[11px] border border-sand-300 rounded-md bg-white focus:outline-none focus:border-terracotta-400"
+      />
+      <p className="text-[10px] text-charcoal-400">
+        {selected?.code ? `Shoppers see the message plus the code ${selected.code} with a Copy button.` : 'Automatic discount — the banner says it applies at checkout.'}
+      </p>
+      <div className="flex gap-1.5">
+        <button
+          disabled={busy || !message.trim() || !discountId}
+          onClick={async () => {
+            setBusy(true)
+            const r = await onPublish(productId, discountId, message.trim())
+            setBusy(false)
+            setResult(r)
+            if (r.ok) setOpen(false)
+          }}
+          className="flex items-center gap-1 text-[11px] font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-2 py-1 rounded-md disabled:opacity-60"
+        >
+          {busy && <Loader2 size={10} className="animate-spin" />}
+          Publish banner
+        </button>
+        <button disabled={busy} onClick={() => setOpen(false)} className="text-[11px] text-charcoal-400 hover:text-charcoal-600 px-2 py-1">
+          Cancel
+        </button>
+      </div>
+      {result && !result.ok && <p className="text-[10px] text-red-600">{result.message}</p>}
+    </div>
+  )
+}
+
+// ─── Discounts tab — every active Shopify discount (code + automatic) with how many times
+// it's been used. Product-scoped discounts expand to their products, each with the banner control.
+type DiscountSortKey = 'title' | 'used' | 'sales' | 'starts' | 'ends'
+
+function DiscountsTab({
+  discounts,
+  loading,
+  error,
+  products,
+  banners,
+  currency,
+  locale,
+  onRefresh,
+  onPublishBanner,
+  onRemoveBanner,
+}: {
+  discounts: DiscountSummary[] | null
+  loading: boolean
+  error: string | null
+  products: ProductSummary[]
+  banners: Record<string, DiscountBannerEntry>
+  currency: string
+  locale: string
+  onRefresh: () => void
+  onPublishBanner: (productId: number, discountId: string, message: string) => Promise<{ ok: boolean; message: string }>
+  onRemoveBanner: (productId: number) => Promise<{ ok: boolean; message: string }>
+}) {
+  const [sortKey, setSortKey] = useState<DiscountSortKey>('used')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  function handleSort(key: DiscountSortKey) {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    else { setSortKey(key); setSortDir(key === 'title' ? 'asc' : 'desc') }
+  }
+
+  const productsById = useMemo(() => new Map(products.filter((p) => p.productId != null).map((p) => [p.productId as number, p])), [products])
+
+  const rows = useMemo(() => {
+    const list = [...(discounts ?? [])]
+    const time = (iso: string | null) => (iso ? new Date(iso).getTime() : Infinity)
+    list.sort((a, b) => {
+      let cmp = 0
+      switch (sortKey) {
+        case 'title': cmp = a.title.localeCompare(b.title); break
+        case 'used': cmp = a.usageCount - b.usageCount; break
+        case 'sales': cmp = (a.totalSales?.amount ?? -Infinity) - (b.totalSales?.amount ?? -Infinity); break
+        case 'starts': cmp = time(a.startsAt) - time(b.startsAt); break
+        case 'ends': cmp = time(a.endsAt) - time(b.endsAt); break
+      }
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+    return list
+  }, [discounts, sortKey, sortDir])
+
+  const totals = useMemo(() => {
+    const list = discounts ?? []
+    const sales = list.reduce((s, d) => s + (d.totalSales?.amount ?? 0), 0)
+    return { count: list.length, uses: list.reduce((s, d) => s + d.usageCount, 0), sales }
+  }, [discounts])
+
+  const bannerCount = Object.keys(banners).length
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="Active discounts" value={discounts ? totals.count.toLocaleString() : '—'} />
+        <StatCard label="Total uses" value={discounts ? totals.uses.toLocaleString() : '—'} sub="Across all active discounts" />
+        <StatCard label="Sales with codes" value={discounts ? fmt(totals.sales, currency, locale) : '—'} sub="Orders that used an active code discount" />
+        <StatCard label="Product banners live" value={bannerCount.toLocaleString()} sub="Shown via the discount-banner theme snippet" />
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-card p-5">
+        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+          <p className="text-xs font-semibold uppercase tracking-widest text-charcoal-400">Active Discounts</p>
+          <button
+            onClick={onRefresh}
+            disabled={loading}
+            className="flex items-center gap-2 text-sm text-charcoal-400 hover:text-terracotta-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-terracotta-100 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
+          </button>
+        </div>
+
+        {error ? (
+          <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-xl text-sm text-red-700">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <div>
+              <p className="break-words">{error}</p>
+              <p className="text-xs text-red-600 mt-1">
+                Listing discounts needs the <code>read_discounts</code> Shopify permission — if this is an access error,
+                reconnect Shopify from the app so the new permission is granted.
+              </p>
+            </div>
+          </div>
+        ) : loading && !discounts ? (
+          <LoadingSpinner label="Loading discounts…" />
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-charcoal-400 italic py-8 text-center">No active discounts on Shopify right now.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-separate border-spacing-0">
+              <thead>
+                <tr className="text-xs text-charcoal-400">
+                  <SortableTh label="Discount" sortKeyValue="title" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="left" />
+                  <th className="pb-3 px-4 text-left font-medium">Details</th>
+                  <th className="pb-3 px-4 text-left font-medium whitespace-nowrap">Applies to</th>
+                  <SortableTh label="Times Used" sortKeyValue="used" activeKey={sortKey} dir={sortDir} onSort={handleSort} title="Shopify updates this count asynchronously — it can lag a few minutes behind real orders" />
+                  <SortableTh label="Sales" sortKeyValue="sales" activeKey={sortKey} dir={sortDir} onSort={handleSort} title="Total sales from orders that used the discount (code discounts only)" />
+                  <SortableTh label="Starts" sortKeyValue="starts" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+                  <SortableTh label="Ends" sortKeyValue="ends" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((d, i) => {
+                  const isOpen = expanded.has(d.id)
+                  const scopedProducts = d.appliesTo === 'products'
+                    ? d.productIds.map((id) => productsById.get(id)).filter((p): p is ProductSummary => !!p)
+                    : []
+                  const usedPct = d.usageLimit ? Math.min(100, (d.usageCount / d.usageLimit) * 100) : null
+                  return (
+                    <Fragment key={d.id}>
+                      <tr className={zebraClass(i)}>
+                        <td className="py-3 pr-4 pl-2 align-top">
+                          <p className="font-medium text-charcoal-700">{d.title}</p>
+                          {d.code ? (
+                            <code className="inline-block mt-1 text-[11px] px-1.5 py-0.5 rounded bg-sand-100 border border-sand-200 text-charcoal-700 tracking-wide">
+                              {d.code}
+                            </code>
+                          ) : (
+                            <span className="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded-full bg-olive-100 text-olive-700">Automatic</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 align-top text-xs text-charcoal-500 max-w-xs">
+                          {d.summary ?? (d.percentage != null ? `${Math.round(d.percentage * 100)}% off` : d.kind.replace(/^Discount/, ''))}
+                        </td>
+                        <td className="py-3 px-4 align-top text-xs text-charcoal-600 whitespace-nowrap">
+                          {d.appliesTo === 'all' && 'All products'}
+                          {d.appliesTo === 'collections' && 'Collections'}
+                          {d.appliesTo === 'other' && '—'}
+                          {d.appliesTo === 'products' && (
+                            <button
+                              onClick={() => setExpanded((prev) => {
+                                const next = new Set(prev)
+                                if (next.has(d.id)) next.delete(d.id)
+                                else next.add(d.id)
+                                return next
+                              })}
+                              className="inline-flex items-center gap-1 text-terracotta-600 hover:text-terracotta-700"
+                            >
+                              {d.productIds.length} product{d.productIds.length === 1 ? '' : 's'}
+                              <ChevronDown size={12} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                            </button>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 align-top text-right whitespace-nowrap">
+                          <p className="font-medium text-charcoal-900">
+                            {d.usageCount.toLocaleString()}
+                            {d.usageLimit != null && <span className="font-normal text-charcoal-400"> / {d.usageLimit.toLocaleString()}</span>}
+                          </p>
+                          {usedPct != null && (
+                            <div className="mt-1 ml-auto w-20 h-1.5 rounded-full bg-sand-200 overflow-hidden" title={`${Math.round(usedPct)}% of the usage limit`}>
+                              <div className={`h-full ${usedPct >= 90 ? 'bg-terracotta-500' : 'bg-olive-500'}`} style={{ width: `${usedPct}%` }} />
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 align-top text-right whitespace-nowrap text-charcoal-700">
+                          {d.totalSales ? fmt(d.totalSales.amount, d.totalSales.currencyCode || currency, locale) : <span className="text-xs text-charcoal-300">—</span>}
+                        </td>
+                        <td className="py-3 px-4 align-top text-right whitespace-nowrap text-charcoal-500">{d.startsAt ? formatDate(d.startsAt) : '—'}</td>
+                        <td className="py-3 px-4 align-top text-right whitespace-nowrap text-charcoal-500">{d.endsAt ? formatDate(d.endsAt) : 'No end date'}</td>
+                      </tr>
+                      {isOpen && (
+                        <tr>
+                          <td colSpan={7} className="px-4 pb-4 pt-1 bg-cream-50">
+                            {scopedProducts.length === 0 ? (
+                              <p className="text-xs text-charcoal-400 italic">None of this discount&apos;s products are in the current product list.</p>
+                            ) : (
+                              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                {scopedProducts.map((p) => {
+                                  const pid = p.productId as number
+                                  return (
+                                    <div key={pid} className="flex items-start gap-2 p-2 bg-white rounded-xl border border-sand-200">
+                                      <ProductThumb imageUrl={p.imageUrl} title={p.title} />
+                                      <div className="min-w-0 flex flex-col gap-1">
+                                        <p className="text-xs text-charcoal-700 truncate">{p.title}</p>
+                                        <DiscountBannerControl
+                                          productId={pid}
+                                          eligible={[d]}
+                                          banner={banners[String(pid)]}
+                                          currency={currency}
+                                          locale={locale}
+                                          onPublish={onPublishBanner}
+                                          onRemove={onRemoveBanner}
+                                        />
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="text-[11px] text-charcoal-400 mt-4">
+          Product banners for store-wide (&ldquo;All products&rdquo;) discounts are added per product from the Spreadsheet tab&apos;s Actions column.
+          Collection-scoped, Buy X Get Y and free-shipping discounts are listed here but can&apos;t be matched to a product banner yet.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export default function ProductsInventory({
   openProductId,
   onOpenProductHandled,
@@ -3743,6 +4138,12 @@ export default function ProductsInventory({
   const [cogsOverrides, setCogsOverrides] = useState<Record<string, { sku: string; manualCogs: number }>>({})
   const [costBreakdown, setCostBreakdown] = useState<Record<string, CostBreakdownEntry>>({})
   const [marginFloors, setMarginFloors] = useState<MarginFloors>({})
+  // Discounts tab + product-page discount banners. Loaded separately from the main product
+  // load so a missing read_discounts scope only affects the Discounts tab/banner buttons.
+  const [discounts, setDiscounts] = useState<DiscountSummary[] | null>(null)
+  const [discountsLoading, setDiscountsLoading] = useState(false)
+  const [discountsError, setDiscountsError] = useState<string | null>(null)
+  const [discountBanners, setDiscountBanners] = useState<Record<string, DiscountBannerEntry>>({})
   // Full ordered Cost Breakdown column layout (built-in + custom, with editable titles).
   const [costComponents, setCostComponents] = useState<CostComponent[]>([...BUILT_IN_COST_COMPONENTS])
   const [loading, setLoading] = useState(true)
@@ -3751,7 +4152,7 @@ export default function ProductsInventory({
 
   // Overview (KPI cards + main table) vs. the Margin Spreadsheet tab — same in-page tab
   // pattern CustomerService uses, since this app has no sidebar-submenu precedent.
-  const [tab, setTab] = useState<'overview' | 'spreadsheet' | 'costs'>('overview')
+  const [tab, setTab] = useState<'overview' | 'spreadsheet' | 'costs' | 'discounts'>('overview')
   // Set by the Spreadsheet tab's Total Cost links — nonce so re-clicking the same product
   // still re-scrolls to it.
   const [costFocus, setCostFocus] = useState<{ productId: number; nonce: number } | null>(null)
@@ -4085,7 +4486,64 @@ export default function ProductsInventory({
     }
   }
 
+  async function loadDiscounts() {
+    setDiscountsLoading(true)
+    setDiscountsError(null)
+    try {
+      const [discountsRes, bannersRes] = await Promise.all([
+        fetch('/api/shopify/discounts'),
+        fetch('/api/shopify/discount-banners'),
+      ])
+      const bannersData = await bannersRes.json()
+      setDiscountBanners(bannersData.banners ?? {})
+      const data = await discountsRes.json()
+      if (!discountsRes.ok) throw new Error(data.error)
+      setDiscounts(data.discounts ?? [])
+    } catch (e) {
+      setDiscountsError(e instanceof Error ? e.message : 'Failed to load discounts')
+    } finally {
+      setDiscountsLoading(false)
+    }
+  }
+
+  function eligibleDiscountsFor(productId: number): DiscountSummary[] {
+    return (discounts ?? []).filter((d) => discountAppliesToProduct(d, productId))
+  }
+
+  async function handlePublishBanner(productId: number, discountId: string, message: string): Promise<{ ok: boolean; message: string }> {
+    try {
+      const res = await fetch(`/api/shopify/products/${productId}/discount-banner`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ discountId, message }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setDiscountBanners((prev) => ({ ...prev, [String(productId)]: data.banner }))
+      return { ok: true, message: 'Banner published to the product page' }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : 'Failed to publish banner' }
+    }
+  }
+
+  async function handleRemoveBanner(productId: number): Promise<{ ok: boolean; message: string }> {
+    try {
+      const res = await fetch(`/api/shopify/products/${productId}/discount-banner`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setDiscountBanners((prev) => {
+        const next = { ...prev }
+        delete next[String(productId)]
+        return next
+      })
+      return { ok: true, message: 'Banner removed from the storefront' }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : 'Failed to remove banner' }
+    }
+  }
+
   async function load() {
+    loadDiscounts()
     setLoading(true)
     setError(null)
     try {
@@ -4360,6 +4818,7 @@ export default function ProductsInventory({
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
+      loadDiscounts() // so the new code shows in the Discounts tab and is offered for a banner
       return {
         ok: true,
         message: data.markdownApplied
@@ -4738,6 +5197,13 @@ export default function ProductsInventory({
             >
               <Calculator size={13} /> Cost Breakdown
             </button>
+            <button
+              onClick={() => setTab('discounts')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all
+                ${tab === 'discounts' ? 'bg-white text-charcoal-700 shadow-sm' : 'text-charcoal-400 hover:text-charcoal-600'}`}
+            >
+              <Tag size={13} /> Discounts
+            </button>
           </div>
           <button
             onClick={load}
@@ -5034,6 +5500,25 @@ export default function ProductsInventory({
           onPushCost={handlePushCostToShopify}
           marginFloors={marginFloors}
           onMarginFloorsSaved={setMarginFloors}
+          eligibleDiscountsFor={eligibleDiscountsFor}
+          banners={discountBanners}
+          onPublishBanner={handlePublishBanner}
+          onRemoveBanner={handleRemoveBanner}
+        />
+      )}
+
+      {tab === 'discounts' && !loading && !error && (
+        <DiscountsTab
+          discounts={discounts}
+          loading={discountsLoading}
+          error={discountsError}
+          products={products}
+          banners={discountBanners}
+          currency={currency}
+          locale={locale}
+          onRefresh={loadDiscounts}
+          onPublishBanner={handlePublishBanner}
+          onRemoveBanner={handleRemoveBanner}
         />
       )}
 
