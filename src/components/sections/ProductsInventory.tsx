@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   RefreshCw, AlertCircle, Package, Check, X, Info, Boxes, XCircle, Clock, Mail, Loader2,
   Pencil, Search, ChevronDown, Megaphone, ArrowUp, ArrowDown, ArrowUpDown, ArrowLeft, Users,
-  AlertTriangle, ExternalLink, Tag, Download, Table2, Save, Calculator, CornerUpLeft,
+  AlertTriangle, ExternalLink, Tag, Download, Table2, Save, Calculator, CornerUpLeft, Plus,
+  ArrowLeftToLine, ArrowRightToLine, ChevronLeft, ChevronRight, Trash2, GripVertical,
 } from 'lucide-react'
 import {
   ResponsiveContainer,
@@ -24,7 +25,7 @@ import {
 } from '@/lib/product-metrics'
 import { QUALIFYING_RETURN_REASONS } from '@/lib/shopify-returns'
 import { LOW_STOCK_TAG, RESTOCK_EARLY_TAG, type ToggleableProductTag } from '@/lib/product-tags'
-import { COST_COMPONENTS, breakdownTotal, type CostBreakdownEntry, type CostComponentKey } from '@/lib/cost-breakdown'
+import { BUILT_IN_COST_COMPONENTS, breakdownTotal, type CostBreakdownEntry, type CostComponent } from '@/lib/cost-breakdown'
 import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry, PreorderEntry, FinalSaleEntry } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
@@ -32,7 +33,7 @@ type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhan
 type SpreadsheetSortKey =
   | 'name' | 'created' | 'stock' | 'unitsSold' | 'cost' | 'price' | 'markedDown' | 'margin' | 'discount'
   | 'discountedPrice' | 'discountedMargin'
-type CostBreakdownSortKey = 'name' | CostComponentKey | 'total'
+type CostBreakdownSortKey = string // 'name' | 'total' | any cost component key (incl. custom columns)
 type SortDir = 'asc' | 'desc'
 type StatusBadge = 'bestseller' | 'soldout' | 'stalled' | null
 
@@ -112,6 +113,11 @@ function zebraClass(i: number): string {
 // Applied to a <table> to additionally band alternating columns, layered on top of the
 // per-row gradient above — gives a spreadsheet-style grid instead of just horizontal stripes.
 const COLUMN_BAND_CLASS = '[&_tbody_td:nth-child(even)]:bg-charcoal-900/[0.06]'
+
+// Frozen first column (like Sheets' "freeze column") — sticks to the left edge of the table's
+// scroll container, with a hairline on its right edge marking the freeze boundary. Callers add
+// their own z-index + opaque background.
+const FROZEN_COL_CLASS = 'sticky left-0 pl-2 shadow-[1px_0_0_0_theme(colors.sand.200)]'
 
 function reorderMailto(p: ProductSummary): string {
   const subject = encodeURIComponent(`Reorder request: ${p.title}`)
@@ -387,6 +393,8 @@ function SortableTh<K extends string>({
   onSort,
   align = 'right',
   title,
+  extra,
+  className = '',
 }: {
   label: string
   sortKeyValue: K
@@ -395,10 +403,12 @@ function SortableTh<K extends string>({
   onSort: (key: K) => void
   align?: 'left' | 'right'
   title?: string
+  extra?: ReactNode // rendered after the sort button, e.g. a custom column's delete control
+  className?: string
 }) {
   const active = activeKey === sortKeyValue
   return (
-    <th title={title} className={`pb-3 px-4 font-medium whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>
+    <th title={title} className={`pb-3 px-4 font-medium whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'} ${className}`}>
       <button
         onClick={() => onSort(sortKeyValue)}
         className={`inline-flex items-center gap-1 hover:text-charcoal-600 transition-colors ${active ? 'text-charcoal-600' : ''}`}
@@ -410,6 +420,7 @@ function SortableTh<K extends string>({
             : <ArrowDown size={11} className="text-terracotta-500" />
           : <ArrowUpDown size={11} className="opacity-30" />}
       </button>
+      {extra}
     </th>
   )
 }
@@ -2047,12 +2058,14 @@ function MarginSpreadsheet({
   locale,
   cogsOverrides,
   costBreakdown,
+  costComponents,
   categoryFor,
   onAssignCogs,
   onOpenBreakdown,
   onCreateDiscount,
   onMarkdown,
   onRevertMarkdown,
+  onPushCost,
 }: {
   products: ProductSummary[]
   shop: string | null
@@ -2060,6 +2073,7 @@ function MarginSpreadsheet({
   locale: string
   cogsOverrides: Record<string, { sku: string; manualCogs: number }>
   costBreakdown: Record<string, CostBreakdownEntry>
+  costComponents: CostComponent[]
   categoryFor: (p: ProductSummary) => string | null
   onOpenBreakdown: (productId: number) => void
   onAssignCogs: (productId: number, sku: string | null, cost: number | null) => void
@@ -2069,6 +2083,7 @@ function MarginSpreadsheet({
   ) => Promise<{ ok: boolean; message: string }>
   onMarkdown: (product: ProductSummary, percentage: number) => Promise<{ ok: boolean; message: string }>
   onRevertMarkdown: (product: ProductSummary) => Promise<{ ok: boolean; message: string }>
+  onPushCost: (product: ProductSummary) => Promise<{ ok: boolean; message: string }>
 }) {
   const [discountDrafts, setDiscountDrafts] = useState<Record<string, number>>({})
   const [loadingDrafts, setLoadingDrafts] = useState(true)
@@ -2102,6 +2117,65 @@ function MarginSpreadsheet({
   const [discountNameById, setDiscountNameById] = useState<Record<number, string>>({})
   const [discountBusyId, setDiscountBusyId] = useState<number | null>(null)
   const [discountResult, setDiscountResult] = useState<Record<number, { ok: boolean; message: string }>>({})
+
+  const [confirmingPushCostId, setConfirmingPushCostId] = useState<number | null>(null)
+  const [pushCostBusyId, setPushCostBusyId] = useState<number | null>(null)
+  const [pushCostResult, setPushCostResult] = useState<Record<number, { ok: boolean; message: string }>>({})
+
+  // Bulk "Sync costs to Shopify": every product (ignoring the search/collection filters) whose
+  // saved Cost Breakdown total differs from Shopify's Cost per item. Pushed one at a time via
+  // the same per-product onPushCost, so each row gets its own result and Shopify isn't flooded.
+  const outOfSyncProducts = useMemo(
+    () => products.filter((p) => {
+      if (p.productId == null) return false
+      const total = breakdownTotal(costBreakdown[String(p.productId)])
+      return total != null && (p.nativeCogs == null || Math.abs(p.nativeCogs - total) >= 0.005)
+    }),
+    [products, costBreakdown],
+  )
+  const [confirmingBulkSync, setConfirmingBulkSync] = useState(false)
+  const [bulkSync, setBulkSync] = useState<{ done: number; total: number } | null>(null)
+  const [bulkSyncSummary, setBulkSyncSummary] = useState<{ ok: boolean; message: string } | null>(null)
+
+  async function syncAllCosts() {
+    const queue = [...outOfSyncProducts]
+    setConfirmingBulkSync(false)
+    setBulkSyncSummary(null)
+    setBulkSync({ done: 0, total: queue.length })
+    let succeeded = 0
+    let failed = 0
+    let consecutiveFailures = 0
+    let lastError = ''
+    for (const [idx, p] of queue.entries()) {
+      const result = await onPushCost(p)
+      setPushCostResult((prev) => ({ ...prev, [p.productId as number]: result }))
+      if (result.ok) {
+        succeeded++
+        consecutiveFailures = 0
+      } else {
+        failed++
+        consecutiveFailures++
+        lastError = result.message
+      }
+      setBulkSync({ done: idx + 1, total: queue.length })
+      // Three failures in a row almost certainly means something systemic (missing scope,
+      // expired session) rather than a bad product — stop instead of failing every row.
+      if (consecutiveFailures >= 3) {
+        setBulkSync(null)
+        setBulkSyncSummary({
+          ok: false,
+          message: `Stopped after ${idx + 1} of ${queue.length}: ${succeeded} synced, ${failed} failed. Last error: ${lastError}`,
+        })
+        return
+      }
+    }
+    setBulkSync(null)
+    setBulkSyncSummary(
+      failed === 0
+        ? { ok: true, message: `${succeeded} product${succeeded === 1 ? '' : 's'} synced to Shopify` }
+        : { ok: false, message: `${succeeded} synced, ${failed} failed — see the red messages in the Actions column` },
+    )
+  }
 
   useEffect(() => {
     fetch('/api/shopify/product-discount-drafts')
@@ -2240,7 +2314,46 @@ function MarginSpreadsheet({
             ))}
           </select>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap justify-end">
+          {bulkSyncSummary && !bulkSync && !confirmingBulkSync && (
+            <span className={`text-xs max-w-md ${bulkSyncSummary.ok ? 'text-olive-600' : 'text-red-600'}`}>
+              {bulkSyncSummary.message}
+            </span>
+          )}
+          {bulkSync ? (
+            <span className="flex items-center gap-2 text-sm text-olive-700">
+              <Loader2 size={14} className="animate-spin" />
+              Syncing costs to Shopify… {bulkSync.done}/{bulkSync.total}
+            </span>
+          ) : confirmingBulkSync ? (
+            <div className="flex items-center gap-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+              <p className="text-xs text-charcoal-700">
+                Update Shopify&apos;s Cost per item for <strong>{outOfSyncProducts.length}</strong>{' '}
+                product{outOfSyncProducts.length === 1 ? '' : 's'} to their Total Cost?
+              </p>
+              <button
+                onClick={syncAllCosts}
+                className="text-xs font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-2.5 py-1 rounded-md"
+              >
+                Confirm
+              </button>
+              <button onClick={() => setConfirmingBulkSync(false)} className="text-xs text-charcoal-400 hover:text-charcoal-600 px-1">
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => { setBulkSyncSummary(null); setConfirmingBulkSync(true) }}
+              disabled={outOfSyncProducts.length === 0}
+              title={outOfSyncProducts.length === 0
+                ? 'Every product with a saved Cost Breakdown already matches Shopify'
+                : 'Push every out-of-sync Total Cost into Shopify\'s Cost per item'}
+              className="flex items-center gap-2 text-sm font-medium text-olive-700 bg-olive-100 hover:bg-olive-200 border border-olive-200 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={14} />
+              {outOfSyncProducts.length === 0 ? 'Costs synced' : `Sync ${outOfSyncProducts.length} cost${outOfSyncProducts.length === 1 ? '' : 's'} to Shopify`}
+            </button>
+          )}
           {saveError && <span className="text-xs text-red-600">{saveError}</span>}
           <button
             onClick={saveDrafts}
@@ -2320,7 +2433,7 @@ function MarginSpreadsheet({
                       <div className="flex flex-col items-end">
                         <button
                           onClick={() => onOpenBreakdown(pid)}
-                          title={COST_COMPONENTS
+                          title={costComponents
                             .filter((c) => typeof breakdown?.[c.key] === 'number')
                             .map((c) => `${c.label} ${fmt(breakdown?.[c.key] as number, currency, locale)}`)
                             .join(' · ')}
@@ -2553,6 +2666,58 @@ function MarginSpreadsheet({
                           {discountResult[pid].message}
                         </p>
                       )}
+
+                      {/* Push the saved Cost Breakdown total into Shopify's "Cost per item". Only
+                          offered when a breakdown exists; once Shopify matches it, shows as synced. */}
+                      {breakdownCost != null && (
+                        p.nativeCogs != null && Math.abs(p.nativeCogs - breakdownCost) < 0.005 && confirmingPushCostId !== pid ? (
+                          <span className="flex items-center gap-1 text-[11px] text-olive-600" title="Shopify's Cost per item matches the Cost Breakdown total">
+                            <Check size={11} /> Cost synced with Shopify
+                          </span>
+                        ) : confirmingPushCostId === pid ? (
+                          <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                            <p className="text-[11px] text-charcoal-700 mb-1.5">
+                              Set Shopify&apos;s Cost per item to <strong>{fmt(breakdownCost, currency, locale)}</strong>
+                              {p.nativeCogs != null && <> (currently {fmt(p.nativeCogs, currency, locale)})</>} on every variant?
+                            </p>
+                            <div className="flex gap-1.5">
+                              <button
+                                disabled={pushCostBusyId === pid}
+                                onClick={async () => {
+                                  setPushCostBusyId(pid)
+                                  const result = await onPushCost(p)
+                                  setPushCostBusyId(null)
+                                  setConfirmingPushCostId(null)
+                                  setPushCostResult((prev) => ({ ...prev, [pid]: result }))
+                                }}
+                                className="flex items-center gap-1 text-[11px] font-medium text-white bg-terracotta-500 hover:bg-terracotta-600 px-2 py-1 rounded-md disabled:opacity-60"
+                              >
+                                {pushCostBusyId === pid && <Loader2 size={10} className="animate-spin" />}
+                                Confirm
+                              </button>
+                              <button
+                                disabled={pushCostBusyId === pid}
+                                onClick={() => setConfirmingPushCostId(null)}
+                                className="text-[11px] text-charcoal-400 hover:text-charcoal-600 px-2 py-1"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmingPushCostId(pid)}
+                            className="flex items-center gap-1.5 text-xs font-medium text-charcoal-600 hover:text-terracotta-600 border border-sand-300 hover:border-terracotta-300 px-2.5 py-1 rounded-lg transition-colors"
+                          >
+                            <Calculator size={11} /> Update Total Cost on Shopify
+                          </button>
+                        )
+                      )}
+                      {pushCostResult[pid] && confirmingPushCostId !== pid && (
+                        <p className={`text-[10px] ${pushCostResult[pid].ok ? 'text-olive-600' : 'text-red-600'}`}>
+                          {pushCostResult[pid].message}
+                        </p>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -2575,15 +2740,14 @@ function MarginSpreadsheet({
 // column. Edits are held locally (as strings, so partially typed decimals aren't reformatted)
 // until "Save" writes the whole sheet to product-cost-breakdown.json. Kept mounted while hidden
 // so jumping to the Spreadsheet tab and back doesn't discard unsaved edits.
-type CostBreakdownEdits = Record<string, Partial<Record<CostComponentKey, string>>>
+type CostBreakdownEdits = Record<string, Record<string, string>> // productId → componentKey → raw input
 
 function toEdits(breakdown: Record<string, CostBreakdownEntry>): CostBreakdownEdits {
   const out: CostBreakdownEdits = {}
   for (const [pid, entry] of Object.entries(breakdown)) {
-    const row: Partial<Record<CostComponentKey, string>> = {}
-    for (const c of COST_COMPONENTS) {
-      const v = entry[c.key]
-      if (typeof v === 'number') row[c.key] = String(v)
+    const row: Record<string, string> = {}
+    for (const [key, v] of Object.entries(entry)) {
+      if (typeof v === 'number') row[key] = String(v)
     }
     out[pid] = row
   }
@@ -2596,15 +2760,28 @@ function parseComponent(raw: string | undefined): number | null {
   return Number.isFinite(v) && v >= 0 ? v : null
 }
 
-function editsToEntry(row: Partial<Record<CostComponentKey, string>> | undefined): CostBreakdownEntry {
+function editsToEntry(row: Record<string, string> | undefined): CostBreakdownEntry {
   const entry: CostBreakdownEntry = {}
   if (!row) return entry
-  for (const c of COST_COMPONENTS) {
-    const v = parseComponent(row[c.key])
-    if (v != null) entry[c.key] = v
+  for (const [key, raw] of Object.entries(row)) {
+    const v = parseComponent(raw)
+    if (v != null) entry[key] = v
   }
   return entry
 }
+
+// Normalizes a value copied from Google Sheets/Excel ("€4,50", "1,234.5", " 3 ") into what the
+// number input accepts. Returns '' for a blank cell, null for something that isn't a number.
+function sanitizePastedNumber(raw: string): string | null {
+  const t = raw.trim()
+  if (t === '') return ''
+  let v = t.replace(/[^\d.,-]/g, '')
+  v = v.includes('.') ? v.replace(/,/g, '') : v.replace(',', '.')
+  const n = parseFloat(v)
+  return Number.isFinite(n) && n >= 0 ? String(n) : null
+}
+
+type CostCell = { r: number; c: number } // index into the visible rows × the column list
 
 function CostBreakdownSheet({
   products,
@@ -2613,9 +2790,11 @@ function CostBreakdownSheet({
   locale,
   active,
   costBreakdown,
+  costComponents,
   focusRequest,
   categoryFor,
   onSaved,
+  onColumnsChanged,
   onOpenSpreadsheet,
 }: {
   products: ProductSummary[]
@@ -2624,11 +2803,14 @@ function CostBreakdownSheet({
   locale: string
   active: boolean
   costBreakdown: Record<string, CostBreakdownEntry>
+  costComponents: CostComponent[]
   focusRequest: { productId: number; nonce: number } | null
   categoryFor: (p: ProductSummary) => string | null
   onSaved: (breakdown: Record<string, CostBreakdownEntry>) => void
+  onColumnsChanged: (columns: CostComponent[]) => void
   onOpenSpreadsheet: () => void
 }) {
+  const columns = costComponents
   const [edits, setEdits] = useState<CostBreakdownEdits>(() => toEdits(costBreakdown))
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -2640,6 +2822,50 @@ function CostBreakdownSheet({
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [highlightId, setHighlightId] = useState<number | null>(null)
   const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({})
+  // Spreadsheet-style fill handle: the last focused cell (by product id, so it survives
+  // re-sorting) shows a small square; dragging it copies that cell's value over the range.
+  const [activeCell, setActiveCell] = useState<{ pid: number; key: string } | null>(null)
+  const [fill, setFill] = useState<{ src: CostCell; to: CostCell } | null>(null)
+  // Column layout (add/insert, rename, move, delete) — saved immediately since it changes the
+  // sheet's structure, unlike cell values, which still wait for "Save". Each header has a
+  // Sheets-style ▾ menu, and headers can be dragged to reorder.
+  const [addingColumn, setAddingColumn] = useState(false)
+  const [newColumnName, setNewColumnName] = useState('')
+  const [columnBusy, setColumnBusy] = useState(false)
+  const [columnError, setColumnError] = useState<string | null>(null)
+  const [menuKey, setMenuKey] = useState<string | null>(null)
+  const [menuMode, setMenuMode] = useState<'menu' | 'insertLeft' | 'insertRight' | 'confirmDelete'>('menu')
+  const [menuName, setMenuName] = useState('')
+  const [renamingKey, setRenamingKey] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [dragKey, setDragKey] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ key: string; side: 'left' | 'right' } | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  // Esc cancels a rename — but unmounting the input can still fire its blur, which would
+  // otherwise save the half-typed name anyway.
+  const skipRenameBlurRef = useRef(false)
+
+  useEffect(() => {
+    if (!menuKey) return
+    function onDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) closeMenu()
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [menuKey])
+
+  function openMenu(key: string) {
+    setMenuKey(key)
+    setMenuMode('menu')
+    setMenuName('')
+    setColumnError(null)
+  }
+
+  function closeMenu() {
+    setMenuKey(null)
+    setMenuMode('menu')
+    setMenuName('')
+  }
 
   // Parent reloaded (Refresh) with nothing unsaved here — pick up the fresh saved values.
   useEffect(() => {
@@ -2674,7 +2900,244 @@ function CostBreakdownSheet({
     }
   }
 
-  function setComponent(productId: number, key: CostComponentKey, raw: string) {
+  async function columnRequest(method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', body: unknown) {
+    setColumnBusy(true)
+    setColumnError(null)
+    try {
+      const res = await fetch('/api/shopify/product-cost-breakdown/columns', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      onColumnsChanged(data.columns ?? [])
+      return data
+    } catch (e) {
+      setColumnError(e instanceof Error ? e.message : 'Column change failed')
+      return null
+    } finally {
+      setColumnBusy(false)
+    }
+  }
+
+  // `index` omitted = append at the end (the header's "+ Add column").
+  async function addColumn(label: string, index?: number) {
+    if (!label.trim()) return false
+    return (await columnRequest('POST', { label: label.trim(), index })) != null
+  }
+
+  async function renameColumn(key: string, label: string) {
+    const current = columns.find((c) => c.key === key)
+    if (!label.trim() || label.trim() === current?.label) {
+      setRenamingKey(null)
+      return
+    }
+    if (await columnRequest('PATCH', { key, label: label.trim() })) setRenamingKey(null)
+  }
+
+  // Optimistic — the header jumps immediately; reverted if the write fails.
+  async function moveColumn(key: string, toIndex: number) {
+    const from = columns.findIndex((c) => c.key === key)
+    if (from < 0) return
+    const next = [...columns]
+    const [moved] = next.splice(from, 1)
+    next.splice(Math.max(0, Math.min(next.length, toIndex)), 0, moved)
+    if (next.every((c, i) => c.key === columns[i].key)) return
+    const previous = columns
+    onColumnsChanged(next)
+    if (!(await columnRequest('PUT', { order: next.map((c) => c.key) }))) onColumnsChanged(previous)
+  }
+
+  async function deleteColumn(key: string) {
+    const data = await columnRequest('DELETE', { key })
+    if (!data) return
+    // Drop the column from unsaved edits too, so a later Save doesn't send a now-unknown key.
+    setEdits((prev) => {
+      const next: CostBreakdownEdits = {}
+      for (const [pid, row] of Object.entries(prev)) {
+        const { [key]: _removed, ...rest } = row
+        next[pid] = rest
+      }
+      return next
+    })
+    if (activeCell?.key === key) setActiveCell(null)
+    if (sortKey === key) setSortKey('name')
+    onSaved(data.breakdown ?? {})
+    closeMenu()
+  }
+
+  function handleHeaderDrop(targetKey: string, side: 'left' | 'right') {
+    if (!dragKey || dragKey === targetKey) return
+    const remaining = columns.filter((c) => c.key !== dragKey)
+    const targetIdx = remaining.findIndex((c) => c.key === targetKey)
+    moveColumn(dragKey, side === 'left' ? targetIdx : targetIdx + 1)
+  }
+
+  function renderColumnHeader(c: CostComponent, ci: number) {
+    const sortActive = sortKey === c.key
+    const isDropLeft = dropTarget?.key === c.key && dropTarget.side === 'left' && dragKey !== c.key
+    const isDropRight = dropTarget?.key === c.key && dropTarget.side === 'right' && dragKey !== c.key
+    const menuItem = 'w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs text-charcoal-700 hover:bg-cream-100 disabled:opacity-40 disabled:hover:bg-transparent'
+    return (
+      <th
+        key={c.key}
+        draggable={renamingKey !== c.key && menuKey !== c.key}
+        onDragStart={(e) => {
+          setDragKey(c.key)
+          e.dataTransfer.effectAllowed = 'move'
+        }}
+        onDragOver={(e) => {
+          if (!dragKey) return
+          e.preventDefault()
+          const rect = e.currentTarget.getBoundingClientRect()
+          setDropTarget({ key: c.key, side: e.clientX < rect.left + rect.width / 2 ? 'left' : 'right' })
+        }}
+        onDrop={(e) => {
+          e.preventDefault()
+          if (dropTarget) handleHeaderDrop(dropTarget.key, dropTarget.side)
+          setDragKey(null)
+          setDropTarget(null)
+        }}
+        onDragEnd={() => { setDragKey(null); setDropTarget(null) }}
+        className={`group relative pb-3 px-2 text-right font-medium whitespace-nowrap
+          ${dragKey === c.key ? 'opacity-40' : ''}
+          ${isDropLeft ? 'shadow-[inset_2px_0_0_0_theme(colors.terracotta.500)]' : ''}
+          ${isDropRight ? 'shadow-[inset_-2px_0_0_0_theme(colors.terracotta.500)]' : ''}`}
+      >
+        {renamingKey === c.key ? (
+          <input
+            autoFocus
+            type="text"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') renameColumn(c.key, renameValue)
+              if (e.key === 'Escape') { skipRenameBlurRef.current = true; setRenamingKey(null); setColumnError(null) }
+            }}
+            onBlur={() => {
+              if (skipRenameBlurRef.current) { skipRenameBlurRef.current = false; return }
+              renameColumn(c.key, renameValue)
+            }}
+            maxLength={40}
+            className="w-28 px-2 py-1 text-xs font-normal text-right border border-terracotta-400 rounded-lg bg-white text-charcoal-700 focus:outline-none"
+          />
+        ) : (
+          <div className="inline-flex items-center gap-0.5">
+            <GripVertical size={11} className="text-charcoal-200 opacity-0 group-hover:opacity-100 cursor-grab transition-opacity" />
+            <button
+              onClick={() => handleSort(c.key)}
+              onDoubleClick={() => { setRenamingKey(c.key); setRenameValue(c.label) }}
+              title="Click to sort · double-click to rename · drag to move"
+              className={`inline-flex items-center gap-1 hover:text-charcoal-600 transition-colors ${sortActive ? 'text-charcoal-600' : ''}`}
+            >
+              {c.label}
+              {sortActive
+                ? sortDir === 'asc'
+                  ? <ArrowUp size={11} className="text-terracotta-500" />
+                  : <ArrowDown size={11} className="text-terracotta-500" />
+                : <ArrowUpDown size={11} className="opacity-30" />}
+            </button>
+            <button
+              onClick={() => (menuKey === c.key ? closeMenu() : openMenu(c.key))}
+              title="Column options"
+              className={`ml-0.5 rounded hover:bg-sand-200 hover:text-charcoal-600 transition-colors ${menuKey === c.key ? 'bg-sand-200 text-charcoal-600' : ''}`}
+            >
+              <ChevronDown size={12} />
+            </button>
+          </div>
+        )}
+
+        {menuKey === c.key && (
+          <div
+            ref={menuRef}
+            className="absolute right-0 top-full mt-1 z-30 w-56 bg-white border border-sand-200 rounded-xl shadow-card py-1 text-left font-normal normal-case"
+          >
+            {menuMode === 'menu' && (
+              <>
+                <button className={menuItem} onClick={() => { setRenamingKey(c.key); setRenameValue(c.label); closeMenu() }}>
+                  <Pencil size={12} /> Rename
+                </button>
+                <div className="my-1 border-t border-sand-100" />
+                <button className={menuItem} disabled={ci === 0 || columnBusy} onClick={() => { moveColumn(c.key, ci - 1); closeMenu() }}>
+                  <ChevronLeft size={12} /> Move left
+                </button>
+                <button className={menuItem} disabled={ci === columns.length - 1 || columnBusy} onClick={() => { moveColumn(c.key, ci + 1); closeMenu() }}>
+                  <ChevronRight size={12} /> Move right
+                </button>
+                <div className="my-1 border-t border-sand-100" />
+                <button className={menuItem} onClick={() => setMenuMode('insertLeft')}>
+                  <ArrowLeftToLine size={12} /> Insert column left
+                </button>
+                <button className={menuItem} onClick={() => setMenuMode('insertRight')}>
+                  <ArrowRightToLine size={12} /> Insert column right
+                </button>
+                {c.custom && (
+                  <>
+                    <div className="my-1 border-t border-sand-100" />
+                    <button className={`${menuItem} text-red-600`} onClick={() => setMenuMode('confirmDelete')}>
+                      <Trash2 size={12} /> Delete column
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+            {(menuMode === 'insertLeft' || menuMode === 'insertRight') && (
+              <div className="px-3 py-2">
+                <p className="text-[11px] text-charcoal-400 mb-1.5">
+                  New column {menuMode === 'insertLeft' ? 'left' : 'right'} of &ldquo;{c.label}&rdquo;
+                </p>
+                <div className="flex items-center gap-1">
+                  <input
+                    autoFocus
+                    type="text"
+                    value={menuName}
+                    onChange={(e) => setMenuName(e.target.value)}
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter' && await addColumn(menuName, menuMode === 'insertLeft' ? ci : ci + 1)) closeMenu()
+                      if (e.key === 'Escape') setMenuMode('menu')
+                    }}
+                    placeholder="Column name"
+                    maxLength={40}
+                    className="flex-1 min-w-0 px-2 py-1 text-xs border border-sand-300 rounded-lg bg-white text-charcoal-700 focus:outline-none focus:border-terracotta-400"
+                  />
+                  <button
+                    onClick={async () => { if (await addColumn(menuName, menuMode === 'insertLeft' ? ci : ci + 1)) closeMenu() }}
+                    disabled={columnBusy || !menuName.trim()}
+                    title="Add column"
+                    className="text-olive-600 hover:text-olive-700 disabled:opacity-40"
+                  >
+                    {columnBusy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                  </button>
+                </div>
+                {columnError && <p className="text-[11px] text-red-600 mt-1 whitespace-normal">{columnError}</p>}
+              </div>
+            )}
+            {menuMode === 'confirmDelete' && (
+              <div className="px-3 py-2 whitespace-normal">
+                <p className="text-xs text-charcoal-700 mb-2">
+                  Delete &ldquo;{c.label}&rdquo; and every product&apos;s value in it? This can&apos;t be undone.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => deleteColumn(c.key)}
+                    disabled={columnBusy}
+                    className="px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-50"
+                  >
+                    {columnBusy ? 'Deleting…' : 'Delete'}
+                  </button>
+                  <button onClick={() => setMenuMode('menu')} className="text-xs text-charcoal-400 hover:underline">Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </th>
+    )
+  }
+
+  function setComponent(productId: number, key: string, raw: string) {
     setEdits((prev) => ({ ...prev, [String(productId)]: { ...prev[String(productId)], [key]: raw } }))
     setDirty(true)
   }
@@ -2735,6 +3198,78 @@ function CostBreakdownSheet({
     return sorted
   }, [products, search, collectionFilter, categoryFor, sortKey, sortDir, costBreakdown])
 
+  // Like Sheets, the fill runs along one axis only — whichever direction was dragged further.
+  function fillRange(f: { src: CostCell; to: CostCell }): CostCell[] {
+    const cells: CostCell[] = []
+    if (Math.abs(f.to.r - f.src.r) >= Math.abs(f.to.c - f.src.c)) {
+      const [a, b] = [Math.min(f.src.r, f.to.r), Math.max(f.src.r, f.to.r)]
+      for (let r = a; r <= b; r++) cells.push({ r, c: f.src.c })
+    } else {
+      const [a, b] = [Math.min(f.src.c, f.to.c), Math.max(f.src.c, f.to.c)]
+      for (let c = a; c <= b; c++) cells.push({ r: f.src.r, c })
+    }
+    return cells
+  }
+
+  const fillCells = useMemo(
+    () => new Set(fill ? fillRange(fill).map((cell) => `${cell.r}:${cell.c}`) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fill],
+  )
+
+  useEffect(() => {
+    if (!fill) return
+    function finish() {
+      if (!fill) return
+      const srcPid = rows[fill.src.r]?.productId
+      const srcKey = columns[fill.src.c].key
+      if (srcPid != null) {
+        const value = edits[String(srcPid)]?.[srcKey] ?? ''
+        const targets = fillRange(fill).filter((cell) => cell.r !== fill.src.r || cell.c !== fill.src.c)
+        if (targets.length > 0) {
+          setEdits((prev) => {
+            const next = { ...prev }
+            for (const cell of targets) {
+              const pid = String(rows[cell.r].productId)
+              next[pid] = { ...next[pid], [columns[cell.c].key]: value }
+            }
+            return next
+          })
+          setDirty(true)
+        }
+      }
+      setFill(null)
+    }
+    window.addEventListener('mouseup', finish)
+    return () => window.removeEventListener('mouseup', finish)
+  }, [fill, rows, edits])
+
+  // Pasting a block copied from Sheets/Excel (tab-separated columns, newline-separated rows)
+  // spreads it across the grid starting at the pasted-into cell; cells past the last visible
+  // row/column are dropped. Non-numeric cells are skipped rather than failing the whole paste.
+  function handlePaste(e: React.ClipboardEvent<HTMLInputElement>, r: number, c: number) {
+    const text = e.clipboardData.getData('text/plain').replace(/\r?\n$/, '')
+    e.preventDefault()
+    const grid = text.split(/\r?\n/).map((line) => line.split('\t'))
+    setEdits((prev) => {
+      const next = { ...prev }
+      grid.forEach((line, i) => {
+        const product = rows[r + i]
+        if (!product) return
+        line.forEach((raw, j) => {
+          const comp = columns[c + j]
+          if (!comp) return
+          const value = sanitizePastedNumber(raw)
+          if (value == null) return
+          const pid = String(product.productId)
+          next[pid] = { ...next[pid], [comp.key]: value }
+        })
+      })
+      return next
+    })
+    setDirty(true)
+  }
+
   return (
     <div className="bg-white rounded-2xl shadow-card p-5 -mx-10">
       <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
@@ -2761,10 +3296,12 @@ function CostBreakdownSheet({
           </select>
           <p className="text-xs text-charcoal-400 max-w-md">
             Per-unit costs. Blanks count as 0. When any field is filled, Total Cost replaces Shopify&apos;s
-            Cost per item in every margin calculation.
+            Cost per item in every margin calculation. Drag a cell&apos;s corner square to copy it down or across,
+            or paste a block straight from Sheets/Excel.
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {columnError && !menuKey && <span className="text-xs text-red-600">{columnError}</span>}
           {dirty && !saving && <span className="text-xs text-amber-600">Unsaved changes</span>}
           {saveError && <span className="text-xs text-red-600">{saveError}</span>}
           <button
@@ -2779,13 +3316,55 @@ function CostBreakdownSheet({
       </div>
 
       <div className="overflow-auto max-h-[70vh]">
-        <table className={`w-full text-sm border-separate border-spacing-0 ${COLUMN_BAND_CLASS}`}>
+        <table className={`w-full text-sm border-separate border-spacing-0 ${COLUMN_BAND_CLASS} ${fill ? 'select-none cursor-crosshair' : ''}`}>
           <thead className="sticky top-0 z-10 bg-white">
             <tr className="text-xs text-charcoal-400 border-b border-sand-200">
-              <SortableTh label="Product" sortKeyValue="name" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="left" />
-              {COST_COMPONENTS.map((c) => (
-                <SortableTh key={c.key} label={c.label} sortKeyValue={c.key} activeKey={sortKey} dir={sortDir} onSort={handleSort} />
-              ))}
+              <SortableTh
+                label="Product"
+                sortKeyValue="name"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={handleSort}
+                align="left"
+                className={`${FROZEN_COL_CLASS} z-20 bg-white`}
+              />
+              {columns.map((c, ci) => renderColumnHeader(c, ci))}
+              <th className="pb-3 px-2 text-left font-medium whitespace-nowrap">
+                {addingColumn ? (
+                  <div className="flex items-center gap-1">
+                    <input
+                      autoFocus
+                      type="text"
+                      value={newColumnName}
+                      onChange={(e) => setNewColumnName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') addColumn(newColumnName).then((ok) => { if (ok) { setNewColumnName(''); setAddingColumn(false) } })
+                        if (e.key === 'Escape') { setAddingColumn(false); setNewColumnName(''); setColumnError(null) }
+                      }}
+                      placeholder="Column name"
+                      maxLength={40}
+                      className="w-28 px-2 py-1 text-xs font-normal border border-sand-300 rounded-lg bg-white text-charcoal-700 focus:outline-none focus:border-terracotta-400"
+                    />
+                    <button
+                      onClick={() => addColumn(newColumnName).then((ok) => { if (ok) { setNewColumnName(''); setAddingColumn(false) } })}
+                      disabled={columnBusy || !newColumnName.trim()}
+                      title="Add column" className="text-olive-600 hover:text-olive-700 disabled:opacity-40">
+                      {columnBusy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                    </button>
+                    <button onClick={() => { setAddingColumn(false); setNewColumnName(''); setColumnError(null) }} title="Cancel" className="text-charcoal-300 hover:text-charcoal-500">
+                      <X size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setAddingColumn(true)}
+                    title="Add a cost column"
+                    className="inline-flex items-center gap-1 text-charcoal-400 hover:text-terracotta-500 transition-colors"
+                  >
+                    <Plus size={12} /> Add column
+                  </button>
+                )}
+              </th>
               <SortableTh label="Total Cost" sortKeyValue="total" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <th className="pb-3 px-4 text-right font-medium whitespace-nowrap">Price</th>
               <th className="pb-3 pl-4 text-right font-medium whitespace-nowrap">Margin</th>
@@ -2803,7 +3382,9 @@ function CostBreakdownSheet({
                   ref={(el) => { rowRefs.current[pid] = el }}
                   className={`${zebraClass(i)} ${highlighted ? 'outline outline-2 -outline-offset-2 outline-terracotta-400' : ''}`}
                 >
-                  <td className="py-3 pr-4">
+                  {/* Frozen: solid bg matching the start of this row's zebra gradient, so the
+                      cost columns scrolling underneath don't show through. */}
+                  <td className={`py-3 pr-4 ${FROZEN_COL_CLASS} z-[5] ${i % 2 === 0 ? 'bg-white' : 'bg-cream-100'}`}>
                     <div className="flex items-center gap-2">
                       <ProductThumb imageUrl={p.imageUrl} title={p.title} />
                       <div className="min-w-0 flex items-center gap-1">
@@ -2829,20 +3410,44 @@ function CostBreakdownSheet({
                       </div>
                     </div>
                   </td>
-                  {COST_COMPONENTS.map((c) => (
-                    <td key={c.key} className="py-3 px-2 text-right">
-                      <input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={row?.[c.key] ?? ''}
-                        onChange={(e) => setComponent(pid, c.key, e.target.value)}
-                        placeholder="—"
-                        aria-label={`${c.label} cost for ${p.title}`}
-                        className="w-20 px-2 py-1 text-sm text-right border border-sand-300 rounded-lg bg-white focus:outline-none focus:border-terracotta-400"
-                      />
-                    </td>
-                  ))}
+                  {columns.map((c, ci) => {
+                    const inFill = fillCells.has(`${i}:${ci}`)
+                    const showHandle = !fill && activeCell?.pid === pid && activeCell.key === c.key
+                    return (
+                      <td
+                        key={c.key}
+                        className="py-3 px-2 text-right"
+                        onMouseEnter={() => { if (fill) setFill({ ...fill, to: { r: i, c: ci } }) }}
+                      >
+                        <div className="relative inline-block">
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={row?.[c.key] ?? ''}
+                            onChange={(e) => setComponent(pid, c.key, e.target.value)}
+                            onFocus={() => setActiveCell({ pid, key: c.key })}
+                            onPaste={(e) => handlePaste(e, i, ci)}
+                            placeholder="—"
+                            aria-label={`${c.label} cost for ${p.title}`}
+                            className={`w-20 px-2 py-1 text-sm text-right border rounded-lg focus:outline-none focus:border-terracotta-400
+                              ${inFill ? 'border-dashed border-terracotta-500 bg-terracotta-100' : 'border-sand-300 bg-white'}`}
+                          />
+                          {showHandle && (
+                            <span
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                setFill({ src: { r: i, c: ci }, to: { r: i, c: ci } })
+                              }}
+                              title="Drag to copy this value down or across"
+                              className="absolute -right-1 -bottom-1 w-2.5 h-2.5 bg-terracotta-500 border-2 border-white rounded-sm cursor-crosshair"
+                            />
+                          )}
+                        </div>
+                      </td>
+                    )
+                  })}
+                  <td className="py-3 px-2" aria-hidden />
                   <td className="py-3 px-4 text-right font-medium text-charcoal-900 whitespace-nowrap">
                     {total != null ? fmt(total, currency, locale) : <span className="text-xs text-charcoal-300 font-normal">—</span>}
                   </td>
@@ -2891,6 +3496,8 @@ export default function ProductsInventory({
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, string>>({})
   const [cogsOverrides, setCogsOverrides] = useState<Record<string, { sku: string; manualCogs: number }>>({})
   const [costBreakdown, setCostBreakdown] = useState<Record<string, CostBreakdownEntry>>({})
+  // Full ordered Cost Breakdown column layout (built-in + custom, with editable titles).
+  const [costComponents, setCostComponents] = useState<CostComponent[]>([...BUILT_IN_COST_COMPONENTS])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const { includeDummy } = useDummyData()
@@ -3263,6 +3870,7 @@ export default function ProductsInventory({
       setCategoryOverrides(categoriesData.categories ?? {})
       setCogsOverrides(cogsData.cogs ?? {})
       setCostBreakdown(costBreakdownData.breakdown ?? {})
+      setCostComponents(costBreakdownData.columns ?? [...BUILT_IN_COST_COMPONENTS])
       setFitNoteOverrides(fitNotesData.fitNotes ?? {})
       setPreorderOverrides(preordersData.preorders ?? {})
       setFinalSaleOverrides(finalSaleData.finalSale ?? {})
@@ -3532,6 +4140,26 @@ export default function ProductsInventory({
       return { ok: true, message: `Price marked down on Shopify (${data.variantsUpdated} variant${data.variantsUpdated === 1 ? '' : 's'} updated)` }
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : 'Failed to mark down price' }
+    }
+  }
+
+  // Writes the saved Cost Breakdown total into Shopify's "Cost per item", then patches the
+  // local product's nativeCogs with the value Shopify accepted (no full reload needed).
+  async function handlePushCostToShopify(product: ProductSummary): Promise<{ ok: boolean; message: string }> {
+    if (product.productId == null) {
+      return { ok: false, message: 'Missing product id.' }
+    }
+    try {
+      const res = await fetch(`/api/shopify/products/${product.productId}/cost`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setProducts((prev) => prev.map((p) => (p.productId === product.productId ? { ...p, nativeCogs: data.cost } : p)))
+      return {
+        ok: true,
+        message: `Cost per item set to ${fmt(data.cost, currency, locale)} on Shopify (${data.variantsUpdated} variant${data.variantsUpdated === 1 ? '' : 's'})`,
+      }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : 'Failed to update cost on Shopify' }
     }
   }
 
@@ -4145,12 +4773,14 @@ export default function ProductsInventory({
           locale={locale}
           cogsOverrides={cogsOverrides}
           costBreakdown={costBreakdown}
+          costComponents={costComponents}
           categoryFor={categoryFor}
           onAssignCogs={handleCogsAssigned}
           onOpenBreakdown={openCostBreakdown}
           onCreateDiscount={handleCreateDiscount}
           onMarkdown={handleMarkdownProduct}
           onRevertMarkdown={handleRevertMarkdown}
+          onPushCost={handlePushCostToShopify}
         />
       )}
 
@@ -4165,9 +4795,11 @@ export default function ProductsInventory({
             locale={locale}
             active={tab === 'costs'}
             costBreakdown={costBreakdown}
+            costComponents={costComponents}
             focusRequest={costFocus}
             categoryFor={categoryFor}
             onSaved={setCostBreakdown}
+            onColumnsChanged={setCostComponents}
             onOpenSpreadsheet={() => setTab('spreadsheet')}
           />
         </div>
