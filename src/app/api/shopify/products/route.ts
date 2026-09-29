@@ -5,6 +5,7 @@ import { REVENUE_STATUSES } from '@/lib/shopify-constants'
 import { readProductCategories } from '@/lib/product-categories-storage'
 import { readProductCogs } from '@/lib/product-cogs-storage'
 import { readDummyOrders, readDummyReturns, readDummyLowRunwayProducts } from '@/lib/dummy-data'
+import { recordInventorySnapshots } from '@/lib/inventory-snapshots-storage'
 import { fetchReturnBreakdownByTitle, aggregateReturnBreakdown } from '@/lib/shopify-returns'
 import { LOW_STOCK_TAG, RESTOCK_EARLY_TAG } from '@/lib/product-tags'
 import type { ReturnBreakdown } from '@/lib/shopify-returns'
@@ -226,8 +227,26 @@ export async function GET(req: NextRequest) {
           returnedUnits: returnedQty,
           unitsSoldAllTime,
           returnReasons: returnsAvailable && returns ? returns.byReason : null,
+          lastRestockedAt: null,
+          restockTrackingSince: null,
         }
       })
+
+      // Restock detection (feeds Inventory Age / slow-mover flag) — only real catalog
+      // products with a known quantity; never fatal to the products load.
+      try {
+        const restocks = recordInventorySnapshots(
+          products
+            .filter((p) => p.productId != null && p.inventoryQuantity != null)
+            .map((p) => ({ productId: p.productId as number, qty: p.inventoryQuantity as number })),
+        )
+        products = products.map((p) => {
+          const r = p.productId != null ? restocks.get(p.productId) : undefined
+          return r ? { ...p, lastRestockedAt: r.lastRestockedAt, restockTrackingSince: r.trackingSince } : p
+        })
+      } catch (err) {
+        console.warn('[products] could not record inventory snapshots, restock detection skipped:', err instanceof Error ? err.message : err)
+      }
     } catch (err) {
       console.warn('[products] could not fetch full catalog (likely missing read_products scope), falling back to order-derived list:', err instanceof Error ? err.message : err)
       source = 'orders'
@@ -265,6 +284,8 @@ export async function GET(req: NextRequest) {
           returnedUnits: returnedQty,
           unitsSoldAllTime: sales.unitsSoldAllTime,
           returnReasons: returnsAvailable && returns ? returns.byReason : null,
+          lastRestockedAt: null,
+          restockTrackingSince: null,
         }
       })
     }
@@ -305,6 +326,8 @@ export async function GET(req: NextRequest) {
           returnedUnits: 0,
           unitsSoldAllTime: d.unitsSoldAllTime,
           returnReasons: null,
+          lastRestockedAt: null,
+          restockTrackingSince: null,
         })
       }
     }

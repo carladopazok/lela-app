@@ -29,13 +29,14 @@ import { BUILT_IN_COST_COMPONENTS, breakdownTotal, type CostBreakdownEntry, type
 import {
   DEFAULT_MARGIN_FLOOR_PCT, marginFloorFor, maxDiscountForFloor, isBelowFloor, type MarginFloors,
 } from '@/lib/margin-floor'
+import { SLOW_MOVER_DAYS, inventoryAgeDays, isSlowMover, suggestSlowMoverDiscount } from '@/lib/inventory-age'
 import type { ProductSummary, RelatedProductsData, InterestedCustomersResponse, RelatedProductEntry, BackInStockResponse, FitNoteEntry, PreorderEntry, FinalSaleEntry } from '@/types'
 
 type ActiveFilter = 'all' | 'soldout' | 'stalled' | 'returnrisk' | 'lowrunway'
 type ProductSortKey = 'name' | 'bestselling' | 'margin' | 'daysStalled' | 'onhand' | 'price' | 'status' | 'runway'
 type SpreadsheetSortKey =
   | 'name' | 'created' | 'stock' | 'unitsSold' | 'cost' | 'price' | 'markedDown' | 'margin' | 'discount'
-  | 'discountedPrice' | 'discountedMargin' | 'marginFloor'
+  | 'discountedPrice' | 'discountedMargin' | 'marginFloor' | 'age'
 type CostBreakdownSortKey = string // 'name' | 'total' | any cost component key (incl. custom columns)
 type SortDir = 'asc' | 'desc'
 type StatusBadge = 'bestseller' | 'soldout' | 'stalled' | null
@@ -2158,6 +2159,8 @@ function MarginSpreadsheet({
     const v = raw != null && raw.trim() !== '' ? parseFloat(raw) : NaN
     return Number.isFinite(v) && v >= 0 && v < 100 ? v : DEFAULT_MARGIN_FLOOR_PCT
   }
+  const [slowMoversOnly, setSlowMoversOnly] = useState(false)
+  const slowMoverCount = useMemo(() => products.filter((p) => p.productId != null && isSlowMover(p)).length, [products])
   const [discountDrafts, setDiscountDrafts] = useState<Record<string, number>>({})
   const [loadingDrafts, setLoadingDrafts] = useState(true)
   const [dirty, setDirty] = useState(false)
@@ -2312,6 +2315,7 @@ function MarginSpreadsheet({
     if (collectionFilter !== 'all') {
       list = list.filter((p) => (categoryFor(p) || 'Uncategorized') === collectionFilter)
     }
+    if (slowMoversOnly) list = list.filter((p) => isSlowMover(p))
 
     const sorted = [...list]
     sorted.sort((a, b) => {
@@ -2319,6 +2323,9 @@ function MarginSpreadsheet({
       switch (sortKey) {
         case 'name':
           cmp = a.title.localeCompare(b.title)
+          break
+        case 'age':
+          cmp = (inventoryAgeDays(a) ?? -Infinity) - (inventoryAgeDays(b) ?? -Infinity)
           break
         case 'created':
           cmp = (a.createdAt ? new Date(a.createdAt).getTime() : -Infinity) -
@@ -2376,7 +2383,7 @@ function MarginSpreadsheet({
     })
     return sorted
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, search, collectionFilter, categoryFor, sortKey, sortDir, cogsOverrides, costBreakdown, discountDrafts, floorEdits])
+  }, [products, search, collectionFilter, categoryFor, sortKey, sortDir, cogsOverrides, costBreakdown, discountDrafts, floorEdits, slowMoversOnly])
 
   if (loadingDrafts) return <LoadingSpinner label="Loading spreadsheet…" />
 
@@ -2407,6 +2414,17 @@ function MarginSpreadsheet({
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
+          <button
+            onClick={() => setSlowMoversOnly((v) => !v)}
+            disabled={slowMoverCount === 0 && !slowMoversOnly}
+            title={`In stock for more than ${SLOW_MOVER_DAYS} days without a detected restock`}
+            className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border transition-colors disabled:opacity-50
+              ${slowMoversOnly
+                ? 'bg-amber-100 border-amber-300 text-amber-800'
+                : 'bg-white border-sand-300 text-charcoal-600 hover:border-amber-300'}`}
+          >
+            <Clock size={13} /> Slow movers ({slowMoverCount})
+          </button>
         </div>
         <div className="flex items-center gap-3 flex-wrap justify-end">
           {bulkSyncSummary && !bulkSync && !confirmingBulkSync && (
@@ -2466,6 +2484,14 @@ function MarginSpreadsheet({
             <tr className="text-xs text-charcoal-400 border-b border-sand-200">
               <SortableTh label="Product" sortKeyValue="name" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="left" />
               <SortableTh label="Date Added" sortKeyValue="created" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortableTh
+                label="Inventory Age"
+                sortKeyValue="age"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={handleSort}
+                title={`Days the current stock has sat — since the last restock the app detected, else since Date Added. Over ${SLOW_MOVER_DAYS} days with stock on hand = possible slow mover.`}
+              />
               <SortableTh label="Units in Stock" sortKeyValue="stock" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
               <SortableTh label="Units Sold" sortKeyValue="unitsSold" activeKey={sortKey} dir={sortDir} onSort={handleSort} title="Trailing 12 months" />
               <SortableTh label="Total Cost" sortKeyValue="cost" activeKey={sortKey} dir={sortDir} onSort={handleSort} title="Cost Breakdown total when filled in, otherwise Shopify's Cost per item or the manual cost" />
@@ -2502,6 +2528,9 @@ function MarginSpreadsheet({
               const floorPct = floorFor(pid)
               const maxOff = maxDiscountForFloor(price, cost, floorPct)
               const discountBreachesFloor = discountPct > 0 && isBelowFloor(discountedMargin, floorPct)
+              const ageDays = inventoryAgeDays(p)
+              const slowMover = isSlowMover(p)
+              const suggestion = slowMover && ageDays != null ? suggestSlowMoverDiscount(ageDays, maxOff) : null
 
               return (
                 <tr key={pid} className={zebraClass(i)}>
@@ -2526,6 +2555,62 @@ function MarginSpreadsheet({
                   </td>
                   <td className="py-3 px-4 text-right text-charcoal-500 whitespace-nowrap">
                     {formatDate(p.createdAt)}
+                  </td>
+                  <td className="py-3 px-4 text-right whitespace-nowrap">
+                    {ageDays == null ? (
+                      <span className="text-xs text-charcoal-300">—</span>
+                    ) : (
+                      <div className="flex flex-col items-end gap-0.5">
+                        <span className={`text-sm ${slowMover ? 'font-medium text-amber-700' : 'text-charcoal-700'}`}>
+                          {ageDays.toLocaleString()} days
+                        </span>
+                        <span
+                          className="text-[10px] text-charcoal-400"
+                          title={p.lastRestockedAt
+                            ? `Restock detected ${formatDate(p.lastRestockedAt)}`
+                            : p.restockTrackingSince
+                              ? `No restock detected since tracking began ${formatDate(p.restockTrackingSince)} — earlier restocks are unknown`
+                              : undefined}
+                        >
+                          {p.lastRestockedAt ? 'since restock' : 'since added'}
+                        </span>
+                        {slowMover && suggestion && (
+                          <>
+                            <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                              <Clock size={9} /> Possible slow mover
+                            </span>
+                            {suggestion.pct > 0 ? (
+                              <div
+                                className="flex items-center gap-1.5 text-[11px]"
+                                title={suggestion.cappedByFloor
+                                  ? `Age suggests ${suggestion.basePct}%, capped at ${suggestion.pct}% to stay above the ${floorPct}% margin floor`
+                                  : suggestion.costUnknown
+                                    ? 'No cost known — the margin floor could not be checked'
+                                    : `Based on ${ageDays} days in stock`}
+                              >
+                                <span className="text-charcoal-600">
+                                  Suggest {suggestion.pct}% off{suggestion.cappedByFloor && ' (floor)'}
+                                </span>
+                                {discountPct === suggestion.pct ? (
+                                  <span className="text-olive-600 inline-flex items-center gap-0.5"><Check size={10} /> Applied</span>
+                                ) : (
+                                  <button
+                                    onClick={() => setDiscountFor(pid, suggestion.pct)}
+                                    className="font-medium text-terracotta-600 hover:text-terracotta-700 hover:underline"
+                                  >
+                                    Apply
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-red-600" title={`Any discount would put margin below the ${floorPct}% floor`}>
+                                No discount room within {floorPct}% floor
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="py-3 px-4 text-right text-charcoal-700 whitespace-nowrap">
                     {p.inventoryQuantity != null ? p.inventoryQuantity.toLocaleString() : '—'}

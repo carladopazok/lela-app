@@ -305,6 +305,8 @@ export interface ProductSummary {
   returnedUnits: number           // qualifying-reason units returned — numerator behind returnRate
   unitsSoldAllTime: number        // denominator behind returnRate, no date floor
   returnReasons: Record<string, number> | null // units returned per Shopify returnReason, incl. the OTHER/UNKNOWN ones excluded from the flag; null when read_returns unavailable
+  lastRestockedAt: string | null  // last restock the app detected (inventory rose by ≥2 between loads — see inventory-snapshots-storage.ts); null if none seen
+  restockTrackingSince: string | null // when the app started tracking this product's stock; restocks before this are unknown. null when source === 'orders'
 }
 
 export interface FitNoteEntry {

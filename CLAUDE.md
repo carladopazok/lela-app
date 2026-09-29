@@ -85,6 +85,19 @@ Each row has four independent Shopify write actions, all behind an inline confir
 - **Bulk version:** "Sync N costs to Shopify" in the Spreadsheet toolbar. It targets every product whose saved breakdown total differs from Shopify's cost, ignoring the search and collection filters, after one inline confirm. It runs the same per-product push one product at a time, showing progress and each row's result. It stops after 3 failures in a row, since that usually means a systemic problem such as a missing scope or expired session. It shows "Costs synced" and is disabled when nothing differs.
 - **Create Discount** — creates a real Shopify discount code via the existing `create-discount` route (called with `markdown: false`), reusing `createProductDiscountCode()` unchanged. Needs `write_discounts`, which per the Auth section above is not yet confirmed granted — may 403 until an OAuth reconnect; the raw error is surfaced rather than masked.
 
+### Inventory Age / Slow Movers (Products & Inventory)
+An **Inventory Age** column in the Margin Spreadsheet shows days since the last detected restock, or since Date Added (`createdAt`) if no restock has been seen (`inventoryAgeDays()` in `src/lib/inventory-age.ts`). A product with stock on hand and age > 120 days (`SLOW_MOVER_DAYS`) is flagged **Possible slow mover**. A toolbar toggle filters to just those. Separate from "Stalled" (`STALLED_DAYS` = 90 days since last *sale*): this is about how long stock has sat, not how long since it sold.
+
+**Restock detection:** Shopify's API has no inventory-adjustment history, so the app detects restocks itself. Every `/api/shopify/products` load calls `recordInventorySnapshots()` (`src/lib/inventory-snapshots-storage.ts`, `data/inventory-snapshots.json`), which records each real catalog product's total on-hand quantity. Products with a null id, i.e. demo data, are skipped. A rise of **≥ 2 units** (`RESTOCK_MIN_INCREASE`) between loads counts as a restock and resets the age. Single-unit rises are ignored because they're usually a returned item. The known limitations:
+- Tracking only starts when a product is first seen, so restocks before that are unknown (`ProductSummary.restockTrackingSince`).
+- Restocks are only seen when the dashboard is loaded.
+- A sale and a restock between two loads can cancel out.
+
+**Suggested discount** (`suggestSlowMoverDiscount()`):
+- By age: 15% (120–179 days), 25% (180–269), 35% (270+).
+- Capped at the product's discount floor (`maxDiscountForFloor()`, rounded down to a multiple of 5). If there's no room, it says so. With no cost known it suggests the tier % unchecked.
+- "Apply" fills that row's Discount % draft; nothing is sent to Shopify until the usual Markdown or Create Discount.
+
 ### Discount Floor (Products & Inventory)
 Every product has a minimum acceptable margin %, 10% by default (`DEFAULT_MARGIN_FLOOR_PCT` in `src/lib/margin-floor.ts`, client-safe). You can override it per product in the Margin Spreadsheet's **Min Margin** column; blank means the default. Overrides are saved to `data/product-margin-floors.json` via `GET`/`PUT /api/shopify/product-margin-floors` by the spreadsheet's existing Save button, together with the discount drafts. Entries equal to the default are dropped.
 
@@ -124,6 +137,7 @@ A third "Cost Breakdown" tab (`CostBreakdownSheet` in `ProductsInventory.tsx`) w
 | `data/product-cost-breakdown.json` | `src/lib/product-cost-breakdown-storage.ts` | `{ productId: { fabric?, beads?, garment?, printing?, painting?, canvas?, label?, handWork?, shipping?, shopifyMonthly?, [customKey]? } }` — per-unit € cost components from the "Cost Breakdown" tab; their sum overrides Shopify's Cost per item |
 | `data/cost-columns.json` | `src/lib/product-cost-breakdown-storage.ts` | `[{ key, label, custom? }]` — ordered Cost Breakdown column layout (built-in + custom), with editable titles; absent = built-in defaults |
 | `data/product-margin-floors.json` | `src/lib/product-margin-floors-storage.ts` | `{ productId: minMarginPct }` — per-product discount-floor overrides (absent = 10% default), saved by the Margin Spreadsheet's Save button |
+| `data/inventory-snapshots.json` | `src/lib/inventory-snapshots-storage.ts` | `{ productId: { qty, lastSeenAt, lastRestockedAt, trackingSince } }` — per-product stock snapshots written on every products load; a ≥2-unit rise = detected restock (feeds Inventory Age) |
 | `data/product-discount-drafts.json` | `src/lib/product-discount-drafts-storage.ts` | `{ productId: discountPercent }` — scratch discount % per product staged in the Products & Inventory "Spreadsheet" tab, only written when its "Save" button is clicked |
 | `data/tickets.json` | `src/lib/cs-storage.ts` | CS ticket array |
 | `data/macros.json` | `src/lib/cs-storage.ts` | CS macro array |
