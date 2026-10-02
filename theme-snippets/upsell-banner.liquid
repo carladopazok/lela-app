@@ -1,0 +1,124 @@
+{%- comment -%}
+  Upsell Banner — reference only, not part of the Next.js build.
+
+  Shown in the cart. For every product in the cart that has an upsell set (the
+  custom.upsell_product metafield, picked on the product's Shopify admin page), it offers that
+  upsell product with an "Add to cart" button. Products with more than one variant
+  (e.g. sizes) get a variant dropdown first, so a random size is never added.
+
+  An upsell is skipped when it's already in the cart, sold out, or not published, and each upsell
+  product is only offered once even if several cart items point to it. The optional
+  custom.upsell_message metafield replaces the default "You might also like" heading.
+
+  Setup:
+  0. Shopify admin → Settings → Metafields and metaobjects → Products → Add definition:
+       - "Upsell product", namespace and key custom.upsell_product, type Product (one product),
+         Storefronts access on.
+       - Optional: "Upsell message", custom.upsell_message, type Single line text, Storefronts
+         access on.
+     Every product's admin page then has an "Upsell product" picker.
+  1. Shopify admin → Online Store → Themes → Edit code → Snippets → Add a new snippet
+     → name it "upsell-banner" → paste this file's contents.
+  2. Render it from your cart template (main-cart-items.liquid, right after the cart items
+     table) and/or your cart drawer (cart-drawer.liquid, right after the endif that closes the
+     cart items, so it's output even when the drawer starts empty) with a render tag for 'upsell-banner'
+     (see the Lela dashboard CLAUDE.md — the tag isn't written out here because Shopify parses
+     tags even inside comments, and a snippet rendering itself fails to save).
+     After "Add to cart" the page reloads so the cart (and drawer) show the new item.
+{%- endcomment -%}
+
+{%- assign lela_cart_ids = cart.items | map: 'product_id' | join: ',' | prepend: ',' | append: ',' -%}
+{%- assign lela_shown = ',' -%}
+{%- for item in cart.items -%}
+  {%- assign lela_upsell = item.product.metafields.custom.upsell_product.value -%}
+  {%- if lela_upsell == blank or lela_upsell.available != true -%}{%- continue -%}{%- endif -%}
+  {%- assign lela_key = lela_upsell.id | prepend: ',' | append: ',' -%}
+  {%- if lela_cart_ids contains lela_key or lela_shown contains lela_key -%}{%- continue -%}{%- endif -%}
+  {%- assign lela_shown = lela_shown | append: lela_upsell.id | append: ',' -%}
+  {%- assign lela_message = item.product.metafields.custom.upsell_message.value | default: 'You might also like' -%}
+
+  <div class="lela-upsell" data-lela-upsell>
+    <p class="lela-upsell__heading">{{ lela_message | escape }}</p>
+    <div class="lela-upsell__row">
+      {%- if lela_upsell.featured_image -%}
+        <a href="{{ lela_upsell.url }}" class="lela-upsell__image">
+          <img src="{{ lela_upsell.featured_image | image_url: width: 160 }}" alt="{{ lela_upsell.featured_image.alt | default: lela_upsell.title | escape }}" width="80" height="80" loading="lazy">
+        </a>
+      {%- endif -%}
+      <div class="lela-upsell__body">
+        <a href="{{ lela_upsell.url }}" class="lela-upsell__title">{{ lela_upsell.title | escape }}</a>
+        <p class="lela-upsell__price">{{ lela_upsell.price | money }}</p>
+        <div class="lela-upsell__actions">
+          {%- if lela_upsell.has_only_default_variant -%}
+            <input type="hidden" data-lela-upsell-variant value="{{ lela_upsell.selected_or_first_available_variant.id }}">
+          {%- else -%}
+            <select data-lela-upsell-variant aria-label="Choose an option for {{ lela_upsell.title | escape }}">
+              {%- for variant in lela_upsell.variants -%}
+                {%- if variant.available -%}
+                  <option value="{{ variant.id }}">{{ variant.title | escape }}{% if variant.price != lela_upsell.price %} — {{ variant.price | money }}{% endif %}</option>
+                {%- endif -%}
+              {%- endfor -%}
+            </select>
+          {%- endif -%}
+          <button type="button" class="lela-upsell__add" data-lela-upsell-add>Add to cart</button>
+        </div>
+        <p class="lela-upsell__error" data-lela-upsell-error hidden></p>
+      </div>
+    </div>
+  </div>
+{%- endfor -%}
+
+{%- comment -%}
+  Styles and script are always output, even with an empty cart: Dawn re-renders the cart page
+  and cart drawer contents via innerHTML after quantity changes and add-to-cart (scripts in that
+  HTML never run), so a banner can appear later without its script. The click handler is
+  delegated on document and bound once, so it works for banners rendered at any time, and
+  rendering the snippet in both the cart page and the drawer doesn't double-bind it.
+{%- endcomment -%}
+  <style>
+    .lela-upsell { margin: 1rem 0; padding: 0.85rem 1rem; border: 1px solid #E3CFC2; background: #FBF3EC; border-radius: 10px; }
+    .lela-upsell__heading { margin: 0 0 0.6rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #8A3B2B; }
+    .lela-upsell__row { display: flex; gap: 0.85rem; align-items: center; }
+    .lela-upsell__image img { display: block; width: 80px; height: 80px; object-fit: cover; border-radius: 8px; }
+    .lela-upsell__body { flex: 1; min-width: 0; }
+    .lela-upsell__title { display: block; font-weight: 600; color: inherit; text-decoration: none; }
+    .lela-upsell__price { margin: 0.15rem 0 0.5rem; font-size: 0.95rem; }
+    .lela-upsell__actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .lela-upsell__actions select { padding: 0.3rem 0.5rem; border-radius: 6px; border: 1px solid #E3CFC2; background: #fff; font-size: 0.85rem; }
+    .lela-upsell__add { padding: 0.4rem 0.9rem; border-radius: 6px; border: 1px solid #B5563E; background: #B5563E; color: #fff; font-size: 0.85rem; cursor: pointer; }
+    .lela-upsell__add[disabled] { opacity: 0.6; cursor: default; }
+    .lela-upsell__error { margin: 0.4rem 0 0; font-size: 0.8rem; color: #B42318; }
+  </style>
+
+  <script>
+    if (!window.lelaUpsellBound) {
+      window.lelaUpsellBound = true;
+      document.addEventListener('click', function (event) {
+        var btn = event.target.closest('[data-lela-upsell-add]');
+        if (!btn || btn.disabled) return;
+        var box = btn.closest('[data-lela-upsell]');
+        var variantId = box.querySelector('[data-lela-upsell-variant]').value;
+        var error = box.querySelector('[data-lela-upsell-error]');
+        btn.disabled = true;
+        btn.textContent = 'Adding…';
+        error.hidden = true;
+        fetch('{{ routes.cart_add_url }}.js', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ items: [{ id: Number(variantId), quantity: 1 }] })
+        })
+          .then(function (res) {
+            return res.json().then(function (data) {
+              if (!res.ok) throw new Error(data.description || data.message || 'Could not add to cart');
+            });
+          })
+          .then(function () { window.location.reload(); })
+          .catch(function (err) {
+            error.textContent = err.message;
+            error.hidden = false;
+            btn.disabled = false;
+            btn.textContent = 'Add to cart';
+          });
+      });
+    }
+  </script>

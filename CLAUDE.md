@@ -140,6 +140,20 @@ A third "Cost Breakdown" tab (`CostBreakdownSheet` in `ProductsInventory.tsx`) w
 
 **Spreadsheet-style editing:** the last focused cost cell shows a fill handle, a small square in its corner. Dragging it copies that cell's value along one axis, whichever was dragged further, just like Google Sheets. Pasting a tab/newline block copied from Sheets or Excel spreads it across the grid, starting from the cell you paste into (`handlePaste()`). Pasted values are cleaned up by `sanitizePastedNumber()`, which strips currency symbols and treats a lone comma as a decimal separator. Both edit the unsaved local state only, so you still need to click Save.
 
+### Upsell Product (lives in Shopify, not the dashboard)
+Upsells are set **in Shopify admin**, not in this dashboard. An earlier dashboard picker was removed at the user's request. On product A's admin page, the native picker sets two product metafields:
+- `custom.upsell_product`, a **`product_reference`** to B
+- `custom.upsell_message`, optional banner text; the storefront falls back to "You might also like"
+
+Their definitions are created once by hand in Settings → Metafields and metaobjects → Products, with **Storefronts access on** (the Thank-you extension reads them through the Storefront API). There's no app code or JSON mirror for them. **No discount is attached yet.** A planned $5-off-B offer (Buy X Get Y for the cart, plus a single-use code on the Thank-you page) was deferred, since it needs `write_discounts`.
+
+Shown in two places. The store is not on Shopify Plus, so nothing can render inside the checkout steps themselves.
+- **Cart:** `theme-snippets/upsell-banner.liquid`, installed once in the cart template and/or cart drawer with `{% render 'upsell-banner' %}`. It offers each in-cart product's upsell unless B is already in the cart or unavailable, with a variant dropdown for multi-variant products. Add to cart goes through `/cart/add.js`, then the page reloads.
+- **Thank-you page:** a Checkout UI extension in `shopify-app/extensions/upsell-thank-you/`. It uses Preact and Polaris web components, `api_version` 2026-07, and target `purchase.thank-you.block.render`. It reads the order's lines (`shopify.lines`), then queries the Storefront API for each product's upsell metafields and links to B's page.
+  - **Separate deploy, outside Next.js:** in `shopify-app/`, run `npm install`, then `npx shopify app config link` (pick the existing Partner app, `SHOPIFY_CLIENT_ID`), then `npx shopify app deploy`. Then add the block in Shopify admin → Settings → Checkout → Customize → Thank you page.
+  - `shopify-app` is excluded from the root `tsconfig.json`.
+  - **Not yet deployed or verified live.**
+
 ### Data storage (JSON files — no DB)
 | File | Owned by | Contents |
 |---|---|---|

@@ -1,0 +1,12 @@
+{
+  "name": "lela-shopify-app",
+  "private": true,
+  "workspaces": ["extensions/*"],
+  "scripts": {
+    "dev": "shopify app dev",
+    "deploy": "shopify app deploy"
+  },
+  "devDependencies": {
+    "@shopify/cli": "^4.8.4"
+  }
+}

@@ -1,0 +1,10 @@
+# Shopify app config for the Lela dashboard's Partner app — only used to deploy checkout UI
+# extensions (Thank-you page upsell). The dashboard itself runs from the Next.js app at the repo
+# root; this folder is never built by Next.
+#
+# Don't fill this in by hand: run `npx shopify app config link` from this folder and pick the
+# existing Lela app (the one whose client id is SHOPIFY_CLIENT_ID in .env.local). The CLI rewrites
+# this file with the real values.
+client_id = "REPLACE_WITH_SHOPIFY_CLIENT_ID"
+name = "Lela"
+embedded = false

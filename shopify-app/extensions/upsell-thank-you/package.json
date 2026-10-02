@@ -1,0 +1,9 @@
+{
+  "name": "upsell-thank-you",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@shopify/ui-extensions": "2026.7.x",
+    "preact": "^10.26.0"
+  }
+}

@@ -1,0 +1,16 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Upsell on Thank you page"
+handle = "upsell-thank-you"
+type = "ui_extension"
+
+[[extensions.targeting]]
+module = "./src/ThankYou.jsx"
+target = "purchase.thank-you.block.render"
+
+# Storefront API access: the upsell (custom.upsell_product / custom.upsell_message product
+# metafields, picked on each product's Shopify admin page) is read through it — both metafield
+# definitions need Storefronts access turned on in Settings → Metafields and metaobjects.
+[extensions.capabilities]
+api_access = true
